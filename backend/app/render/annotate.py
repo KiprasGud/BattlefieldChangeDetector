@@ -1,17 +1,117 @@
-"""PERSON 3: draw red boxes + labels on the image."""
+"""PERSON 3: draw red boxes + labels on the image with optional sector grid."""
 import cv2
 import numpy as np
 
 from ..contracts import AnalysisResult
 
 
-def annotate(img: np.ndarray, result: AnalysisResult) -> np.ndarray:
+def draw_grid_overlay(img: np.ndarray, opacity: float = 0.25) -> np.ndarray:
+    """Draw a 4x4 tactical sector grid (columns A-D, rows 1-4) onto the image."""
+    out = img.copy()
+    overlay = img.copy()
+    h, w = out.shape[:2]
+
+    # Draw grid lines
+    cols = ["A", "B", "C", "D"]
+    rows = ["1", "2", "3", "4"]
+
+    # 4 columns -> 3 interior lines, 4 rows -> 3 interior lines
+    for i in range(1, 4):
+        x = int(i * w / 4)
+        y = int(i * h / 4)
+        cv2.line(overlay, (x, 0), (x, h), (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.line(overlay, (0, y), (w, y), (200, 200, 200), 1, cv2.LINE_AA)
+
+    # Blend grid lines with opacity
+    cv2.addWeighted(overlay, opacity, out, 1 - opacity, 0, out)
+
+    # Sector labels at the top-left of each cell
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = max(0.4, min(0.7, w / 1200))
+    thickness = 1
+
+    for col_idx, col_name in enumerate(cols):
+        for row_idx, row_name in enumerate(rows):
+            sector_name = f"{col_name}{row_name}"
+            cell_x = int(col_idx * w / 4) + 8
+            cell_y = int(row_idx * h / 4) + int(18 * font_scale / 0.5)
+
+            # Subdued text label with slight dark shadow for legibility
+            cv2.putText(out, sector_name, (cell_x + 1, cell_y + 1), font, font_scale, (0, 0, 0), thickness + 1, cv2.LINE_AA)
+            cv2.putText(out, sector_name, (cell_x, cell_y), font, font_scale, (220, 220, 220), thickness, cv2.LINE_AA)
+
+    return out
+
+
+def annotate(img: np.ndarray, result: AnalysisResult, draw_grid: bool = False) -> np.ndarray:
+    """Renders high-visibility tactical red boxes, numbered badges, and optional sector grid."""
     out = img.copy()
     h, w = out.shape[:2]
+
+    if draw_grid:
+        out = draw_grid_overlay(out)
+
     for i, c in enumerate(result.changes, 1):
         ymin, xmin, ymax, xmax = c.box
-        p1 = (int(xmin / 1000 * w), int(ymin / 1000 * h))
-        p2 = (int(xmax / 1000 * w), int(ymax / 1000 * h))
-        cv2.rectangle(out, p1, p2, (0, 0, 255), 3)
-        cv2.putText(out, f"{i}", (p1[0], max(p1[1] - 6, 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        # Normalize/clamp box coordinates to [0, 1000]
+        ymin = max(0, min(1000, float(ymin)))
+        ymax = max(0, min(1000, float(ymax)))
+        xmin = max(0, min(1000, float(xmin)))
+        xmax = max(0, min(1000, float(xmax)))
+
+        if ymin > ymax:
+            ymin, ymax = ymax, ymin
+        if xmin > xmax:
+            xmin, xmax = xmax, xmin
+
+        px1 = int(xmin / 1000 * w)
+        py1 = int(ymin / 1000 * h)
+        px2 = int(xmax / 1000 * w)
+        py2 = int(ymax / 1000 * h)
+
+        # 1. Subtle dark drop-shadow border around the box for contrast
+        cv2.rectangle(out, (max(0, px1 - 1), max(0, py1 - 1)), (min(w - 1, px2 + 1), min(h - 1, py2 + 1)), (0, 0, 0), 4, cv2.LINE_AA)
+        # 2. Main tactical red bounding box (BGR: (0, 0, 230))
+        cv2.rectangle(out, (px1, py1), (px2, py2), (20, 20, 240), 2, cv2.LINE_AA)
+
+        # 3. Corner accent ticks to give a military HUD / tactical look
+        tick_len = max(6, min(18, int(min(px2 - px1, py2 - py1) * 0.25)))
+        if tick_len > 0:
+            # Top-left
+            cv2.line(out, (px1, py1), (px1 + tick_len, py1), (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.line(out, (px1, py1), (px1, py1 + tick_len), (0, 255, 255), 2, cv2.LINE_AA)
+            # Top-right
+            cv2.line(out, (px2, py1), (px2 - tick_len, py1), (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.line(out, (px2, py1), (px2, py1 + tick_len), (0, 255, 255), 2, cv2.LINE_AA)
+            # Bottom-left
+            cv2.line(out, (px1, py2), (px1 + tick_len, py2), (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.line(out, (px1, py2), (px1, py2 - tick_len), (0, 255, 255), 2, cv2.LINE_AA)
+            # Bottom-right
+            cv2.line(out, (px2, py2), (px2 - tick_len, py2), (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.line(out, (px2, py2), (px2, py2 - tick_len), (0, 255, 255), 2, cv2.LINE_AA)
+
+        # 4. Numbered label badge
+        label_text = f"#{i}"
+        if c.sector:
+            label_text += f" [{c.sector}]"
+
+        font = cv2.FONT_HERSHEY_DUPLEX
+        font_scale = 0.55
+        font_thickness = 1
+        (txt_w, txt_h), baseline = cv2.getTextSize(label_text, font, font_scale, font_thickness)
+
+        # Badge positioning above box or inside box if too close to top
+        badge_y2 = py1 - 4 if py1 - (txt_h + 8) > 0 else py1 + txt_h + 10
+        badge_y1 = badge_y2 - txt_h - 6
+        badge_x1 = px1
+        badge_x2 = min(w - 1, px1 + txt_w + 10)
+
+        # Badge background: solid dark red/black with border
+        cv2.rectangle(out, (badge_x1, badge_y1), (badge_x2, badge_y2), (20, 20, 20), -1)
+        cv2.rectangle(out, (badge_x1, badge_y1), (badge_x2, badge_y2), (20, 20, 240), 1)
+
+        # Text inside badge: white
+        text_origin = (badge_x1 + 5, badge_y2 - 4)
+        cv2.putText(out, label_text, text_origin, font, font_scale, (255, 255, 255), font_thickness, cv2.LINE_AA)
+
     return out

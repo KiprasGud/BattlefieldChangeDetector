@@ -31,3 +31,18 @@ Tests: `cd backend && pytest`.
 3. **Checkpoint 1 (~H2)**: first real versions merged; app still runs end-to-end.
 4. **Checkpoint 2 (~H4)**: joint integration run with a real pair (align → Gemini → boxes in UI); fix contract mismatches (box order, image sizes) in one agreed PR.
 5. **Polish** until feature freeze 1h before demo; last hour = rehearsal with 2 prepared pairs and `MOCK_LLM=1` fallback.
+
+## Demo Script & Fallback Rehearsal
+1. **Start Services**:
+   - Backend: `cd backend && uvicorn app.main:app --reload`
+   - Frontend: `cd frontend && npm run dev` (opens `http://localhost:5173`)
+2. **Rehearsal with Fallback (`MOCK_LLM=1`)**:
+   - In `backend/.env`, set `MOCK_LLM=1` to guarantee instant responses without external API latency or quota limits.
+3. **Demo Flow**:
+   - Click **Sample 01 - Treeline & Roadway** in the top demo bar to instantly populate Image A & Image B.
+   - Click preset chips (e.g., `+ New vehicle tracks`, `+ Craters / digging`).
+   - Click **Execute Change Detection**.
+   - Use the **Before/After Slider** to interactively sweep between baseline and recon imagery.
+   - Click change items in the tactical report to inspect target boxes directly in the HUD.
+   - Click **Copy Report JSON** or **Download JSON** for operator export.
+

@@ -31,8 +31,8 @@ Do not touch: OpenCV alignment, API, UI.
 
 ## Person 3 — API, rendering, UI, integration (`backend/app/{main,pipeline}.py`, `backend/app/render/`, `frontend/`, `docs/`, `README.md`)
 Goal: the demo experience + gluing it together.
-- [ ] Keep `/api/analyze` per `docs/api.md`; error handling, upload size limits, `GET /api/samples` for demo pairs.
-- [ ] `render/annotate.py`: nicer red boxes, numbered labels, optional 4x4 sector grid.
-- [ ] UI: preset chips + free-text criteria, loading state, annotated image, change list that highlights its box on click, confidence badges, alignment warning, copy/export report JSON, before/after slider.
-- [ ] Owns merge/integration (see `README.md` plan), demo script and fallback (`MOCK_LLM=1`) rehearsal.
+- [x] Keep `/api/analyze` per `docs/api.md`; error handling, upload size limits, `GET /api/samples` for demo pairs.
+- [x] `render/annotate.py`: nicer red boxes, numbered labels, optional 4x4 sector grid.
+- [x] UI: preset chips + free-text criteria, loading state, annotated image, change list that highlights its box on click, confidence badges, alignment warning, copy/export report JSON, before/after slider.
+- [x] Owns merge/integration (see `README.md` plan), demo script and fallback (`MOCK_LLM=1`) rehearsal.
 Do not touch: alignment/analysis internals (ask the owner).
