@@ -1,5 +1,4 @@
 """PERSON 3: orchestrates align -> diff/heatmap -> analyze -> annotate."""
-import inspect
 import time
 import uuid
 from pathlib import Path
@@ -8,7 +7,7 @@ from typing import Callable, Optional
 import cv2
 import numpy as np
 
-from .alignment import align
+from .alignment import IMREAD_PIXELS, align, harmonize_resolution
 from .analysis import analyze, use_mock
 from .contracts import AnalyzeResponse
 from .render import annotate
@@ -19,10 +18,14 @@ OUTPUT_DIR = Path(__file__).resolve().parents[1] / "output"
 def decode(data: bytes, label: str = "image") -> np.ndarray:
     if not data:
         raise ValueError(f"Empty payload for {label}")
-    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), IMREAD_PIXELS)
     if img is None:
         raise ValueError(f"Could not decode {label}: invalid or corrupted image format")
     return img
+
+
+def is_mirrored(homography) -> bool:
+    return homography is not None and np.linalg.det(np.asarray(homography, np.float64)[:2, :2]) < 0
 
 
 def run(
@@ -61,11 +64,14 @@ def run(
     if meta is not None:
         meta["align_method"] = method
     if not aligned.ok:
-        warnings.append(f"Alignment degraded: low quality score ({aligned.quality:.2f}).")
-    if method == "ecc":
+        warnings.append(
+            "Images could not be matched visually (too few common features). "
+            "Image B is shown unaligned; detections are unreliable."
+        )
+    elif method == "ecc":
         warnings.append("Fallback ECC alignment applied due to insufficient feature matches.")
-    elif method == "none":
-        warnings.append("No perspective warp was applied.")
+    if aligned.ok and is_mirrored(aligned.homography):
+        warnings.append("Image B is mirrored relative to Image A; corrected during alignment.")
 
     images = {
         "image_a_url": f"/api/files/{job_id}/image_a.jpg",
@@ -81,7 +87,12 @@ def run(
     try:
         from .diff.heatmap import candidate_boxes, change_heatmap
         valid_mask = getattr(aligned, "valid_mask", None)
-        heat_map = change_heatmap(img_a, aligned.aligned_b, valid_mask)
+        try:
+            # B coarser than A: blur A to B's resolution so edges don't light up (no-op otherwise).
+            diff_a = harmonize_resolution(img_a, aligned.homography, img_b.shape)
+        except Exception:
+            diff_a = img_a
+        heat_map = change_heatmap(diff_a, aligned.aligned_b, valid_mask)
         hints = candidate_boxes(heat_map)
         heat_uint8 = (np.clip(heat_map, 0, 1) * 255).astype(np.uint8)
         heat_color = cv2.applyColorMap(heat_uint8, cv2.COLORMAP_JET)
@@ -99,18 +110,15 @@ def run(
     if offline:
         warnings.append("OFFLINE MODE: MOCK_LLM=1 or no GEMINI_API_KEY. Using fixture data.")
     try:
-        sig = inspect.signature(analyze)
-        if "hints" in sig.parameters and hints is not None:
-            result = analyze(img_a, aligned.aligned_b, criteria, lang, hints=hints)
-        else:
-            result = analyze(img_a, aligned.aligned_b, criteria, lang)
+        result = analyze(img_a, aligned.aligned_b, criteria, lang, hints=hints, aligned=aligned.ok)
     except Exception as e:
         # Automatic offline fallback: switch to mock fixture when Gemini fails
         try:
             from .analysis.mock import analyze_mock
             result = analyze_mock(img_a, aligned.aligned_b, criteria, lang)
             offline = True
-            warnings.append(f"OFFLINE MODE: Gemini API unavailable ({type(e).__name__}). Using fixture data.")
+            reason = str(e)[:120] or type(e).__name__
+            warnings.append(f"OFFLINE MODE: Gemini API unavailable ({reason}). Using fixture data.")
         except Exception as fallback_err:
             raise RuntimeError(f"Both Gemini and mock fallback failed: {fallback_err}") from e
     timings["ai"] = round(time.perf_counter() - t0, 3)

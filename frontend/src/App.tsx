@@ -290,7 +290,7 @@ export default function App() {
       {/* Footer */}
       <footer className="app-footer">
         <div>Žvalgas AI • Aerial Reconnaissance &amp; Change Detection System</div>
-        <div className="mono">[0–1000] Bounding Coordinates • OpenCV + Gemini 2.5</div>
+        <div className="mono">[0–1000] Bounding Coordinates • OpenCV + Gemini 3.5 Flash-Lite</div>
       </footer>
     </div>
   );

@@ -2,7 +2,7 @@
 
 Run from the repo root:
     python eval/run.py                              # all configs that can run (Gemini ones need GEMINI_API_KEY)
-    python eval/run.py --configs mock,gemini --models gemini-2.5-flash,gemini-2.5-pro
+    python eval/run.py --configs mock,gemini --models gemini-3.5-flash-lite,gemini-2.5-flash
 
 Every label file in eval/labels/*.json is a sample pair with criteria cases and ground-truth boxes.
 Each case goes through the real pipeline steps (alignment -> optional heatmap hints -> analysis) and is
@@ -37,17 +37,17 @@ CONFIGS = {
 }
 
 
-def heatmap_hints(img_a, aligned):
-    """Candidate boxes from P1's heatmap module, None while it does not exist yet."""
-    try:
-        from app.diff import candidate_boxes, change_heatmap
-    except ImportError:
-        return None
-    return candidate_boxes(change_heatmap(img_a, aligned.aligned_b, getattr(aligned, "valid_mask", None)))
+def heatmap_hints(img_a, img_b, aligned):
+    """Candidate boxes from P1's heatmap module, computed exactly as pipeline.run does."""
+    from app.alignment import harmonize_resolution
+    from app.diff.heatmap import candidate_boxes, change_heatmap
+
+    diff_a = harmonize_resolution(img_a, aligned.homography, img_b.shape)
+    return candidate_boxes(change_heatmap(diff_a, aligned.aligned_b, getattr(aligned, "valid_mask", None)))
 
 
 def run_config(name: str, labels: list[dict], model: str | None) -> dict:
-    from app.alignment import align
+    from app.alignment import IMREAD_PIXELS, align
     from app.analysis import analyze
 
     env, use_hints = CONFIGS[name]
@@ -59,14 +59,14 @@ def run_config(name: str, labels: list[dict], model: str | None) -> dict:
     rows, counts, seconds = [], [], []
     try:
         for label in labels:
-            img_a = cv2.imread(str(ROOT / label["image_a"]))
-            img_b = cv2.imread(str(ROOT / label["image_b"]))
+            img_a = cv2.imread(str(ROOT / label["image_a"]), IMREAD_PIXELS)
+            img_b = cv2.imread(str(ROOT / label["image_b"]), IMREAD_PIXELS)
             aligned = align(img_a, img_b)
-            hints = heatmap_hints(img_a, aligned) if use_hints else None
+            hints = heatmap_hints(img_a, img_b, aligned) if use_hints else None
             for case in label["cases"]:
                 start = time.perf_counter()
                 try:
-                    result = analyze(img_a, aligned.aligned_b, case["criteria"], "en", hints)
+                    result = analyze(img_a, aligned.aligned_b, case["criteria"], "en", hints, aligned=aligned.ok)
                     pred = [c.box for c in result.changes]
                     error = ""
                 except Exception as e:  # one failing case must not stop the run

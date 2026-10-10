@@ -49,12 +49,17 @@ Returns job execution state, live stage progression, timings, warnings, and resu
 
 Stages: `"queued"` ➔ `"aligning"` ➔ `"heatmap"` ➔ `"ai"` ➔ `"render"` ➔ `"done"` | `"error"`.
 
+- `align_ok`: `true` when B was visually matched to A (same scene). `false` means no reliable match: B is shown only resized to A's frame.
+- `align_quality`: 0–1 visual agreement of A and aligned B over their overlap (normalized cross-correlation).
+- `align_method`: `"sift"` (feature match), `"ecc"` (fallback for feature-poor, nearly aligned pairs) or `"none"`.
+- `warnings` may contain: `"Images could not be matched visually …"` (`align_ok=false`), `"Image B is mirrored relative to Image A; corrected during alignment."`, `"Fallback ECC alignment applied …"`, and `"OFFLINE MODE: …"` (fixture data instead of Gemini, with the reason).
+
 ## GET /api/jobs
 Returns list of recent missions:
 `200 [{"job_id": "...", "created_at": "...", "status": "done", "criteria": "...", "summary": "...", "changes_count": 2, ...}]`
 
 ## Conventions
 - `box` = `[ymin, xmin, ymax, xmax]`, normalized 0–1000, origin top-left of image A frame (aligned B has A's size).
-- Images are OpenCV BGR uint8 arrays inside Python.
+- Images are OpenCV BGR uint8 arrays inside Python, decoded from pixels only: EXIF orientation, file name, type and size never affect the comparison (the 25 MB limit is upload validation only).
 - Sector = 4x4 grid, columns A–D, rows 1–4 (label = column letter + row number).
 - Errors: `400` with descriptive error for undecodable images, empty criteria, or unsupported languages. `413` for images exceeding 25MB.

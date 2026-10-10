@@ -4,8 +4,8 @@ python-multipart
 python-dotenv
 pydantic>=2
 numpy
-opencv-python
+opencv-python>=4.5.1
 pillow
-google-genai
+google-genai>=2.29
 pytest
 httpx

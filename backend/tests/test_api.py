@@ -1,4 +1,6 @@
 import time
+from pathlib import Path
+
 import cv2
 import numpy as np
 from fastapi.testclient import TestClient
@@ -6,10 +8,11 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 client = TestClient(app)
+SAMPLES = Path(__file__).resolve().parents[2] / "shared" / "sample_data"
 
 
-def _jpg():
-    ok, buf = cv2.imencode(".jpg", np.zeros((100, 120, 3), np.uint8))
+def _jpg(img=None):
+    ok, buf = cv2.imencode(".jpg", np.zeros((100, 120, 3), np.uint8) if img is None else img)
     return buf.tobytes()
 
 
@@ -65,6 +68,22 @@ def test_analyze_sync_mode():
     assert body["result"]["changes"]
     assert body["images"]["annotated_url"].startswith("/api/files/")
     assert "total" in body["timings"]
+
+
+def test_analyze_matches_mirrored_rotated_recon():
+    a = cv2.imread(str(SAMPLES / "pair01" / "a.jpg"))
+    b = cv2.rotate(cv2.flip(cv2.imread(str(SAMPLES / "pair01" / "b.jpg")), 1), cv2.ROTATE_90_CLOCKWISE)
+    r = client.post(
+        "/api/analyze?sync=true",
+        # Mismatched file name / type on purpose: only decoded pixels count.
+        files={"image_a": ("a.jpg", _jpg(a), "image/jpeg"), "image_b": ("b.png", _jpg(b), "image/jpeg")},
+        data={"criteria": "New vehicle tracks, craters / digging"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["align_ok"] is True
+    assert any("mirrored" in w for w in body["warnings"])
+    assert {c["sector"] for c in body["result"]["changes"]} == {"D1", "B3"}
 
 
 def test_get_jobs_history():

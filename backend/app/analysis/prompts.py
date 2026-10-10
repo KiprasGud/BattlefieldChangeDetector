@@ -3,9 +3,21 @@ from typing import Optional
 
 LANGUAGES = {"en": "English", "lt": "Lithuanian"}
 
+PROMPT_VERSION = 2  # bump on any prompt change: it is part of the analysis cache key
+
+IMAGE_B_ALIGNED = (
+    "Image B: the present, already geometrically aligned to Image A. It may come from a different camera, resolution "
+    "or orientation and was rotated, mirrored, rescaled or cropped to match"
+)
+IMAGE_B_UNALIGNED = (
+    "Image B: the present. Automatic alignment FAILED: Image B is only resized to Image A's frame, so the same ground "
+    "point may sit at a different pixel position. Match areas by landmarks (roads, tree lines, buildings) before "
+    "comparing, and place boxes where the change appears in Image B"
+)
+
 SYSTEM_PROMPT = """You are a top-tier military imagery intelligence (IMINT) analyst. You receive two aerial drone images of the same sector:
 - Image A: the past (baseline)
-- Image B: the present, already geometrically aligned to Image A
+- {image_b}
 Perform precise change detection strictly against the operator's criteria.
 
 ANALYSIS CRITERIA (operator query):
@@ -15,7 +27,7 @@ WORKFLOW:
 1. Baseline: study Image A - roads, tracks, vegetation, structures, terrain. Ignore natural daylight and shadow differences.
 2. Grid scan: split Image B into a 4x4 grid and systematically compare every cell with the same cell in Image A.
 3. Apply criteria: report ONLY changes that match the analysis criteria. Ignore all other changes.
-4. Reject false positives: a change is NOT real if it is explained by clouds, cloud shadows, a different sun angle, residual camera angle or alignment offset (edges, black borders), sun glint, or wind moving vegetation.
+4. Reject false positives: a change is NOT real if it is explained by clouds, cloud shadows, a different sun angle, residual camera angle or alignment offset (edges, black borders), sun glint, wind moving vegetation, a difference in sharpness or resolution, resampling blur, JPEG compression artifacts, or an overall exposure or colour cast.
 
 Pure black areas in Image B are outside the camera coverage after alignment. They are NOT changes: never report them and never place a box on them.
 
@@ -60,9 +72,10 @@ Return one verdict per candidate, using its number as "index".
 """
 
 
-def build_prompt(criteria: str, lang: str = "en", hints: Optional[list[list[int]]] = None) -> str:
+def build_prompt(criteria: str, lang: str = "en", hints: Optional[list[list[int]]] = None, aligned: bool = True) -> str:
     language = LANGUAGES.get(lang, "English")
-    prompt = SYSTEM_PROMPT.format(criteria=criteria.strip(), language=language) + "\n" + FEW_SHOT
+    image_b = IMAGE_B_ALIGNED if aligned else IMAGE_B_UNALIGNED
+    prompt = SYSTEM_PROMPT.format(criteria=criteria.strip(), language=language, image_b=image_b) + "\n" + FEW_SHOT
     if hints:
         regions = "\n".join(f"{i}. {list(map(int, box))}" for i, box in enumerate(hints[:MAX_HINTS], 1))
         prompt += "\n" + HINTS_PROMPT.format(regions=regions)
