@@ -1,5 +1,6 @@
 // Mirrors backend/app/contracts.py. FROZEN: change via small PR.
 export type Confidence = "high" | "medium" | "low";
+export type AlignMethod = "sift" | "ecc" | "none";
 
 export interface Change {
   type: string;
@@ -22,5 +23,13 @@ export interface AnalyzeResponse {
   result: AnalysisResult;
   align_quality: number;
   align_ok: boolean;
-  images: { aligned_b_url: string; annotated_url: string };
+  align_method?: AlignMethod;
+  images: {
+    aligned_b_url: string;
+    annotated_url: string;
+    image_a_url?: string;
+    heatmap_url?: string;
+  };
+  timings?: Record<string, number>;
+  warnings?: string[];
 }

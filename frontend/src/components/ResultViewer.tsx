@@ -7,11 +7,13 @@ interface Props {
   onSelectIndex: (index: number | null) => void;
 }
 
-type ViewMode = "slider" | "annotated" | "side_by_side";
+type ViewMode = "slider" | "annotated" | "side_by_side" | "heatmap";
 
 export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Props) {
   const [mode, setMode] = useState<ViewMode>("slider");
   const [sliderPos, setSliderPos] = useState(50); // percentage 0-100
+  const [heatmapOpacity, setHeatmapOpacity] = useState(0.65);
+  const [showHeatmapOverlay, setShowHeatmapOverlay] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -19,6 +21,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
   const imagesMap = data.images as Record<string, string>;
   const beforeUrl = imagesMap["image_a_url"] || data.images.aligned_b_url;
   const afterUrl = data.images.annotated_url;
+  const heatmapUrl = imagesMap["heatmap_url"];
 
   const handlePointerDown = () => setIsDragging(true);
 
@@ -52,7 +55,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
       {/* Top status bar: Alignment quality & mode tabs */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "14px", marginBottom: "18px" }}>
         {/* Alignment health & quality badge */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
           <div
             style={{
               display: "flex",
@@ -73,15 +76,32 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
               }}
             />
             <span style={{ fontSize: "0.82rem", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
-              {data.align_ok ? "CO-REGISTRATION ALIGNED" : "ALIGNMENT DEGRADED"}
+              {data.align_ok ? "ALIGNED" : "ALIGNMENT DEGRADED"}
             </span>
             <span style={{ fontSize: "0.78rem", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
               ({(data.align_quality * 100).toFixed(0)}% quality)
             </span>
           </div>
 
+          {/* Alignment method */}
+          {data.align_method && (
+            <span
+              style={{
+                fontSize: "0.75rem",
+                fontFamily: "var(--font-mono)",
+                background: "rgba(30, 41, 59, 0.6)",
+                border: "1px solid var(--border-subtle)",
+                padding: "4px 8px",
+                borderRadius: "4px",
+                color: "var(--text-muted)",
+              }}
+            >
+              METHOD: {data.align_method.toUpperCase()}
+            </span>
+          )}
+
           <span style={{ fontSize: "0.8rem", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-            JOB: #{data.job_id}
+            MISSION: #{data.job_id}
           </span>
         </div>
 
@@ -95,7 +115,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
               background: mode === "slider" ? "rgba(6, 182, 212, 0.25)" : "transparent",
               color: mode === "slider" ? "var(--accent-cyan)" : "var(--text-muted)",
               border: "none",
-              padding: "6px 14px",
+              padding: "6px 12px",
               borderRadius: "6px",
               fontSize: "0.8rem",
               fontWeight: 600,
@@ -103,7 +123,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
               transition: "all 0.15s ease",
             }}
           >
-            ↔ Before/After Slider
+            ↔ Slider
           </button>
           <button
             type="button"
@@ -113,7 +133,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
               background: mode === "annotated" ? "rgba(6, 182, 212, 0.25)" : "transparent",
               color: mode === "annotated" ? "var(--accent-cyan)" : "var(--text-muted)",
               border: "none",
-              padding: "6px 14px",
+              padding: "6px 12px",
               borderRadius: "6px",
               fontSize: "0.8rem",
               fontWeight: 600,
@@ -121,7 +141,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
               transition: "all 0.15s ease",
             }}
           >
-            🎯 Annotated HUD
+            🎯 HUD
           </button>
           <button
             type="button"
@@ -131,7 +151,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
               background: mode === "side_by_side" ? "rgba(6, 182, 212, 0.25)" : "transparent",
               color: mode === "side_by_side" ? "var(--accent-cyan)" : "var(--text-muted)",
               border: "none",
-              padding: "6px 14px",
+              padding: "6px 12px",
               borderRadius: "6px",
               fontSize: "0.8rem",
               fontWeight: 600,
@@ -139,18 +159,95 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
               transition: "all 0.15s ease",
             }}
           >
-            ◫ Side-by-Side
+            ◫ Split
           </button>
+          {heatmapUrl && (
+            <button
+              type="button"
+              id="mode-heatmap-btn"
+              onClick={() => setMode("heatmap")}
+              style={{
+                background: mode === "heatmap" ? "rgba(245, 158, 11, 0.25)" : "transparent",
+                color: mode === "heatmap" ? "var(--accent-amber)" : "var(--text-muted)",
+                border: "none",
+                padding: "6px 12px",
+                borderRadius: "6px",
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                cursor: "pointer",
+                transition: "all 0.15s ease",
+              }}
+            >
+              🔥 Heatmap
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Alignment Quality Warning Banner if align_ok is false */}
-      {!data.align_ok && (
-        <div className="warning-banner">
+      {/* Warnings Banner */}
+      {data.warnings && data.warnings.length > 0 && (
+        <div className="warning-banner" style={{ marginBottom: "16px" }}>
           <span style={{ fontSize: "1.2rem" }}>⚠️</span>
           <div>
-            <strong>Alignment Quality Warning:</strong> Computer vision feature matching detected sub-threshold alignment quality ({(data.align_quality * 100).toFixed(0)}%). Visual analysis proceeded without full perspective warp. Coordinate verification is recommended.
+            <strong>Operational Warnings:</strong>
+            <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+              {data.warnings.map((w, idx) => (
+                <li key={idx} style={{ fontSize: "0.84rem" }}>{w}</li>
+              ))}
+            </ul>
           </div>
+        </div>
+      )}
+
+      {/* Timings row */}
+      {data.timings && Object.keys(data.timings).length > 0 && (
+        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", marginBottom: "14px" }}>
+          <span style={{ fontSize: "0.74rem", fontFamily: "var(--font-mono)", color: "var(--text-dim)", textTransform: "uppercase" }}>
+            LATENCY:
+          </span>
+          {Object.entries(data.timings).map(([stage, sec]) => (
+            <span
+              key={stage}
+              style={{
+                fontSize: "0.72rem",
+                fontFamily: "var(--font-mono)",
+                background: "rgba(15, 23, 42, 0.7)",
+                border: "1px solid var(--border-subtle)",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                color: stage === "total" ? "var(--accent-cyan)" : "var(--text-muted)",
+              }}
+            >
+              {stage}: {Number(sec).toFixed(2)}s
+            </span>
+          ))}
+
+          {/* Heatmap overlay toggle when available */}
+          {heatmapUrl && mode !== "heatmap" && (
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "10px" }}>
+              <label style={{ fontSize: "0.76rem", color: "var(--accent-amber)", display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={showHeatmapOverlay}
+                  onChange={(e) => setShowHeatmapOverlay(e.target.checked)}
+                  style={{ accentColor: "var(--accent-amber)" }}
+                />
+                Overlay Change Heatmap
+              </label>
+              {showHeatmapOverlay && (
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1.0"
+                  step="0.05"
+                  value={heatmapOpacity}
+                  onChange={(e) => setHeatmapOpacity(parseFloat(e.target.value))}
+                  style={{ width: "80px", accentColor: "var(--accent-amber)" }}
+                  title={`Opacity: ${(heatmapOpacity * 100).toFixed(0)}%`}
+                />
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -176,6 +273,25 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
             alt="Annotated After"
             style={{ width: "100%", display: "block", pointerEvents: "none" }}
           />
+
+          {/* Optional Heatmap blend */}
+          {showHeatmapOverlay && heatmapUrl && (
+            <img
+              src={heatmapUrl}
+              alt="Heatmap overlay"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                opacity: heatmapOpacity,
+                mixBlendMode: "screen",
+                pointerEvents: "none",
+              }}
+            />
+          )}
 
           {/* Top layer: Before Image clipped */}
           <div
@@ -266,7 +382,6 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
               boxShadow: "0 0 12px var(--accent-cyan)",
             }}
           >
-            {/* Center thumb knob */}
             <div
               style={{
                 position: "absolute",
@@ -341,6 +456,25 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
         >
           <img src={afterUrl} alt="Annotated Output" style={{ width: "100%", display: "block" }} />
 
+          {/* Optional Heatmap blend */}
+          {showHeatmapOverlay && heatmapUrl && (
+            <img
+              src={heatmapUrl}
+              alt="Heatmap overlay"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                opacity: heatmapOpacity,
+                mixBlendMode: "screen",
+                pointerEvents: "none",
+              }}
+            />
+          )}
+
           {/* Interactive target overlay boxes */}
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none" }}>
             {data.result.changes.map((c, idx) => {
@@ -392,6 +526,12 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
               <img src={afterUrl} alt="Annotated" style={{ width: "100%", display: "block" }} />
             </div>
           </div>
+        </div>
+      )}
+
+      {mode === "heatmap" && heatmapUrl && (
+        <div style={{ borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-subtle)", background: "#050811", textAlign: "center" }}>
+          <img src={heatmapUrl} alt="Diff Change Heatmap" style={{ width: "100%", display: "block" }} />
         </div>
       )}
     </div>
