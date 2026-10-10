@@ -12,8 +12,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from watchdog.events import FileSystemEvent, FileSystemEventHandler
-from watchdog.observers import Observer
+try:
+    from watchdog.events import FileSystemEvent, FileSystemEventHandler
+    from watchdog.observers import Observer
+except ImportError:  # optional: the API still runs, only the watch folder is off (pip install -r requirements.txt)
+    FileSystemEvent = FileSystemEventHandler = object
+    Observer = None
 
 from .. import batch
 from ..storage.batches import init_batch_db
@@ -53,6 +57,8 @@ class Watcher:
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> "Watcher":
+        if Observer is None:
+            raise RuntimeError("watch folder needs the watchdog package: pip install -r requirements.txt")
         self.folder.mkdir(parents=True, exist_ok=True)
         self._observer = Observer()
         self._observer.schedule(_Handler(self), str(self.folder), recursive=False)

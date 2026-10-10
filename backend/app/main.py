@@ -1,5 +1,6 @@
 """PERSON 3: FastAPI app with non-blocking job model, history, and samples.
 Also hosts the watch-folder batch pipeline (watcher + review API) for drone videos and image pairs."""
+import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -47,7 +48,10 @@ executor = ThreadPoolExecutor(max_workers=4)
 async def lifespan(_app: FastAPI):
     batch.resume_interrupted()
     if watcher.watch_enabled():
-        watcher.start_service()
+        try:
+            watcher.start_service()
+        except RuntimeError as e:
+            logging.getLogger(__name__).warning("Watch folder disabled: %s", e)
     yield
     watcher.stop_service()
 
