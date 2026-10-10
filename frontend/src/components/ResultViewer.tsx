@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
-import type { AnalyzeResponse } from "../types";
+import { useState, useRef, type CSSProperties, type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from "react";
+import type { AnalyzeResponse, Change } from "../types";
 
 interface Props {
   data: AnalyzeResponse;
@@ -9,240 +9,217 @@ interface Props {
 
 type ViewMode = "slider" | "annotated" | "side_by_side" | "heatmap";
 
+// Pointer travel (px) below which a press counts as a click, not a drag.
+const DRAG_THRESHOLD = 4;
+
+/** <img> that shows a readable placeholder instead of the broken-image icon. */
+function SafeImg({ src, alt, className, style }: { src?: string; alt: string; className?: string; style?: CSSProperties }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  if (!src || failed === src) {
+    return (
+      <div className={`img-missing ${className ?? ""}`} style={style}>
+        {alt}: image unavailable
+      </div>
+    );
+  }
+  return <img src={src} alt={alt} className={className} style={style} draggable={false} onError={() => setFailed(src)} />;
+}
+
+/** Change boxes positioned in % of the image frame (box = [ymin, xmin, ymax, xmax], 0-1000). */
+function BoxOverlay({
+  changes,
+  selectedIndex,
+  onSelect,
+  outlined,
+}: {
+  changes: Change[];
+  selectedIndex: number | null;
+  onSelect?: (idx: number) => void;
+  outlined: boolean; // false when the image already has burned-in boxes
+}) {
+  return (
+    <div className="box-layer">
+      {changes.map((c, idx) => {
+        const [ymin, xmin, ymax, xmax] = c.box.map((v) => Math.max(0, Math.min(1000, v)) / 10);
+        const isSelected = selectedIndex === idx;
+        return (
+          <div
+            key={idx}
+            id={`box-${idx}`}
+            data-box={idx}
+            className={`change-box${isSelected ? " selected" : ""}${outlined ? " outlined" : ""}`}
+            title={`#${idx + 1} ${c.type} (${c.confidence})`}
+            onClick={onSelect ? () => onSelect(idx) : undefined}
+            style={{ top: `${ymin}%`, left: `${xmin}%`, width: `${xmax - xmin}%`, height: `${ymax - ymin}%` }}
+          >
+            {(outlined || isSelected) && <span className="change-box-label">#{idx + 1}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  id,
+  accent = "cyan",
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  id: string;
+  accent?: "cyan" | "amber";
+  children: ReactNode;
+}) {
+  return (
+    <button type="button" id={id} onClick={onClick} className={`mode-btn ${accent}${active ? " active" : ""}`} aria-pressed={active}>
+      {children}
+    </button>
+  );
+}
+
 export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Props) {
   const [mode, setMode] = useState<ViewMode>("slider");
   const [sliderPos, setSliderPos] = useState(50); // percentage 0-100
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.65);
   const [showHeatmapOverlay, setShowHeatmapOverlay] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ id: number; startX: number; moved: boolean; boxIdx: number | null } | null>(null);
 
-  // Fallback image A URL from data or aligned_b if image_a not present
-  const imagesMap = data.images as Record<string, string>;
-  const beforeUrl = imagesMap["image_a_url"] || data.images.aligned_b_url;
-  const afterUrl = data.images.annotated_url;
-  const heatmapUrl = imagesMap["heatmap_url"];
+  const changes = data.result.changes;
+  const beforeUrl = data.images.image_a_url || data.images.aligned_b_url;
+  const alignedUrl = data.images.aligned_b_url || data.images.annotated_url;
+  const annotatedUrl = data.images.annotated_url;
+  const heatmapUrl = data.images.heatmap_url;
+  // Old jobs may have no heatmap; never leave the viewer empty.
+  const view: ViewMode = mode === "heatmap" && !heatmapUrl ? "slider" : mode;
 
-  const handlePointerDown = () => setIsDragging(true);
+  const toggleSelect = (idx: number) => onSelectIndex(selectedIndex === idx ? null : idx);
 
-  const handlePointerMove = useCallback((e: MouseEvent | TouchEvent) => {
-    if (!isDragging || !containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
-    const pos = ((clientX - rect.left) / rect.width) * 100;
-    setSliderPos(Math.max(0, Math.min(100, pos)));
-  }, [isDragging]);
+  const posFromClientX = (clientX: number) => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0) return;
+    setSliderPos(Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100)));
+  };
 
-  const handlePointerUp = useCallback(() => setIsDragging(false), []);
-
-  useEffect(() => {
-    if (isDragging) {
-      window.addEventListener("mousemove", handlePointerMove);
-      window.addEventListener("mouseup", handlePointerUp);
-      window.addEventListener("touchmove", handlePointerMove);
-      window.addEventListener("touchend", handlePointerUp);
-    }
-    return () => {
-      window.removeEventListener("mousemove", handlePointerMove);
-      window.removeEventListener("mouseup", handlePointerUp);
-      window.removeEventListener("touchmove", handlePointerMove);
-      window.removeEventListener("touchend", handlePointerUp);
+  // Press anywhere on the image: drag moves the divider, a plain click selects a box (or jumps the divider).
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const boxEl = (e.target as HTMLElement).closest("[data-box]");
+    drag.current = {
+      id: e.pointerId,
+      startX: e.clientX,
+      moved: false,
+      boxIdx: boxEl ? Number(boxEl.getAttribute("data-box")) : null,
     };
-  }, [isDragging, handlePointerMove, handlePointerUp]);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d || d.id !== e.pointerId) return;
+    if (!d.moved && Math.abs(e.clientX - d.startX) < DRAG_THRESHOLD) return;
+    d.moved = true;
+    posFromClientX(e.clientX);
+  };
+
+  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d || d.id !== e.pointerId) return;
+    drag.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (d.moved) return;
+    if (d.boxIdx !== null) toggleSelect(d.boxIdx);
+    else posFromClientX(e.clientX);
+  };
+
+  const onHandleKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 10 : 2;
+    if (e.key === "ArrowLeft") setSliderPos((p) => Math.max(0, p - step));
+    else if (e.key === "ArrowRight") setSliderPos((p) => Math.min(100, p + step));
+    else if (e.key === "Home") setSliderPos(0);
+    else if (e.key === "End") setSliderPos(100);
+    else return;
+    e.preventDefault();
+  };
+
+  const heatmapLayer =
+    showHeatmapOverlay && heatmapUrl ? (
+      <img src={heatmapUrl} alt="" className="layer-fill" draggable={false} style={{ opacity: heatmapOpacity, mixBlendMode: "screen" }} />
+    ) : null;
 
   return (
-    <div className="glass-panel" style={{ padding: "24px", marginBottom: "28px" }}>
+    <div id="result-viewer" className="glass-panel panel">
       {/* Top status bar: Alignment quality & mode tabs */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "14px", marginBottom: "18px" }}>
-        {/* Alignment health & quality badge */}
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-              padding: "6px 14px",
-              borderRadius: "6px",
-              background: data.align_ok ? "rgba(16, 185, 129, 0.1)" : "rgba(239, 68, 68, 0.12)",
-              border: `1px solid ${data.align_ok ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.4)"}`,
-            }}
-          >
-            <span
-              style={{
-                width: "8px",
-                height: "8px",
-                borderRadius: "50%",
-                background: data.align_ok ? "var(--accent-emerald)" : "var(--accent-red)",
-              }}
-            />
-            <span style={{ fontSize: "0.82rem", fontFamily: "var(--font-mono)", fontWeight: 600 }}>
-              {data.align_ok ? "ALIGNED" : "ALIGNMENT DEGRADED"}
-            </span>
-            <span style={{ fontSize: "0.78rem", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-              ({(data.align_quality * 100).toFixed(0)}% quality)
-            </span>
+      <div className="viewer-toolbar">
+        <div className="viewer-meta">
+          <div className={`align-badge ${data.align_ok ? "ok" : "bad"}`}>
+            <span className="dot" />
+            <span className="align-badge-text">{data.align_ok ? "ALIGNED" : "ALIGNMENT DEGRADED"}</span>
+            <span className="mono dim small">({(data.align_quality * 100).toFixed(0)}% quality)</span>
           </div>
-
-          {/* Alignment method */}
-          {data.align_method && (
-            <span
-              style={{
-                fontSize: "0.75rem",
-                fontFamily: "var(--font-mono)",
-                background: "rgba(30, 41, 59, 0.6)",
-                border: "1px solid var(--border-subtle)",
-                padding: "4px 8px",
-                borderRadius: "4px",
-                color: "var(--text-muted)",
-              }}
-            >
-              METHOD: {data.align_method.toUpperCase()}
-            </span>
-          )}
-
-          <span style={{ fontSize: "0.8rem", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-            MISSION: #{data.job_id}
-          </span>
+          {data.align_method && <span className="chip mono">METHOD: {data.align_method.toUpperCase()}</span>}
+          <span className="mono dim small">MISSION: #{data.job_id}</span>
         </div>
 
-        {/* View mode toggle */}
-        <div style={{ display: "flex", background: "rgba(15, 23, 42, 0.9)", border: "1px solid var(--border-subtle)", borderRadius: "8px", padding: "3px" }}>
-          <button
-            type="button"
-            id="mode-slider-btn"
-            onClick={() => setMode("slider")}
-            style={{
-              background: mode === "slider" ? "rgba(6, 182, 212, 0.25)" : "transparent",
-              color: mode === "slider" ? "var(--accent-cyan)" : "var(--text-muted)",
-              border: "none",
-              padding: "6px 12px",
-              borderRadius: "6px",
-              fontSize: "0.8rem",
-              fontWeight: 600,
-              cursor: "pointer",
-              transition: "all 0.15s ease",
-            }}
-          >
-            ↔ Slider
-          </button>
-          <button
-            type="button"
-            id="mode-annotated-btn"
-            onClick={() => setMode("annotated")}
-            style={{
-              background: mode === "annotated" ? "rgba(6, 182, 212, 0.25)" : "transparent",
-              color: mode === "annotated" ? "var(--accent-cyan)" : "var(--text-muted)",
-              border: "none",
-              padding: "6px 12px",
-              borderRadius: "6px",
-              fontSize: "0.8rem",
-              fontWeight: 600,
-              cursor: "pointer",
-              transition: "all 0.15s ease",
-            }}
-          >
-            🎯 HUD
-          </button>
-          <button
-            type="button"
-            id="mode-side-by-side-btn"
-            onClick={() => setMode("side_by_side")}
-            style={{
-              background: mode === "side_by_side" ? "rgba(6, 182, 212, 0.25)" : "transparent",
-              color: mode === "side_by_side" ? "var(--accent-cyan)" : "var(--text-muted)",
-              border: "none",
-              padding: "6px 12px",
-              borderRadius: "6px",
-              fontSize: "0.8rem",
-              fontWeight: 600,
-              cursor: "pointer",
-              transition: "all 0.15s ease",
-            }}
-          >
-            ◫ Split
-          </button>
+        <div className="mode-group" role="group" aria-label="View mode">
+          <ModeButton id="mode-slider-btn" active={view === "slider"} onClick={() => setMode("slider")}>↔ Slider</ModeButton>
+          <ModeButton id="mode-annotated-btn" active={view === "annotated"} onClick={() => setMode("annotated")}>🎯 HUD</ModeButton>
+          <ModeButton id="mode-side-by-side-btn" active={view === "side_by_side"} onClick={() => setMode("side_by_side")}>◫ Split</ModeButton>
           {heatmapUrl && (
-            <button
-              type="button"
-              id="mode-heatmap-btn"
-              onClick={() => setMode("heatmap")}
-              style={{
-                background: mode === "heatmap" ? "rgba(245, 158, 11, 0.25)" : "transparent",
-                color: mode === "heatmap" ? "var(--accent-amber)" : "var(--text-muted)",
-                border: "none",
-                padding: "6px 12px",
-                borderRadius: "6px",
-                fontSize: "0.8rem",
-                fontWeight: 600,
-                cursor: "pointer",
-                transition: "all 0.15s ease",
-              }}
-            >
+            <ModeButton id="mode-heatmap-btn" accent="amber" active={view === "heatmap"} onClick={() => setMode("heatmap")}>
               🔥 Heatmap
-            </button>
+            </ModeButton>
           )}
         </div>
       </div>
 
       {/* Warnings Banner */}
       {data.warnings && data.warnings.length > 0 && (
-        <div className="warning-banner" style={{ marginBottom: "16px" }}>
+        <div className="warning-banner">
           <span style={{ fontSize: "1.2rem" }}>⚠️</span>
           <div>
             <strong>Operational Warnings:</strong>
-            <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+            <ul className="warning-list">
               {data.warnings.map((w, idx) => (
-                <li key={idx} style={{ fontSize: "0.84rem" }}>{w}</li>
+                <li key={idx}>{w}</li>
               ))}
             </ul>
           </div>
         </div>
       )}
 
-      {/* Timings row */}
-      {data.timings && Object.keys(data.timings).length > 0 && (
-        <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center", marginBottom: "14px" }}>
-          <span style={{ fontSize: "0.74rem", fontFamily: "var(--font-mono)", color: "var(--text-dim)", textTransform: "uppercase" }}>
-            LATENCY:
-          </span>
-          {Object.entries(data.timings).map(([stage, sec]) => (
-            <span
-              key={stage}
-              style={{
-                fontSize: "0.72rem",
-                fontFamily: "var(--font-mono)",
-                background: "rgba(15, 23, 42, 0.7)",
-                border: "1px solid var(--border-subtle)",
-                padding: "2px 8px",
-                borderRadius: "4px",
-                color: stage === "total" ? "var(--accent-cyan)" : "var(--text-muted)",
-              }}
-            >
-              {stage}: {Number(sec).toFixed(2)}s
-            </span>
-          ))}
+      {/* Timings + heatmap overlay controls */}
+      {((data.timings && Object.keys(data.timings).length > 0) || (heatmapUrl && view !== "heatmap")) && (
+        <div className="viewer-subbar">
+          {data.timings && Object.keys(data.timings).length > 0 && (
+            <div className="timings">
+              <span className="mono dim xsmall upper">LATENCY:</span>
+              {Object.entries(data.timings).map(([stage, sec]) => (
+                <span key={stage} className={`timing-chip mono${stage === "total" ? " total" : ""}`}>
+                  {stage}: {Number(sec).toFixed(2)}s
+                </span>
+              ))}
+            </div>
+          )}
 
-          {/* Heatmap overlay toggle when available */}
-          {heatmapUrl && mode !== "heatmap" && (
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "10px" }}>
-              <label style={{ fontSize: "0.76rem", color: "var(--accent-amber)", display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={showHeatmapOverlay}
-                  onChange={(e) => setShowHeatmapOverlay(e.target.checked)}
-                  style={{ accentColor: "var(--accent-amber)" }}
-                />
-                Overlay Change Heatmap
+          {heatmapUrl && view !== "heatmap" && view !== "side_by_side" && (
+            <div className="heatmap-controls">
+              <label>
+                <input type="checkbox" checked={showHeatmapOverlay} onChange={(e) => setShowHeatmapOverlay(e.target.checked)} />
+                Overlay change heatmap
               </label>
               {showHeatmapOverlay && (
                 <input
                   type="range"
                   min="0.1"
-                  max="1.0"
+                  max="1"
                   step="0.05"
                   value={heatmapOpacity}
                   onChange={(e) => setHeatmapOpacity(parseFloat(e.target.value))}
-                  style={{ width: "80px", accentColor: "var(--accent-amber)" }}
+                  aria-label="Heatmap opacity"
                   title={`Opacity: ${(heatmapOpacity * 100).toFixed(0)}%`}
                 />
               )}
@@ -252,286 +229,78 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
       )}
 
       {/* Main View Area */}
-      {mode === "slider" && (
+      {view === "slider" && (
         <div
           ref={containerRef}
           id="slider-container"
-          style={{
-            position: "relative",
-            width: "100%",
-            borderRadius: "10px",
-            overflow: "hidden",
-            userSelect: "none",
-            background: "#030712",
-            border: "1px solid var(--border-subtle)",
-            boxShadow: "0 12px 30px rgba(0, 0, 0, 0.6)",
-          }}
+          className="image-frame slider-frame"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={() => (drag.current = null)}
         >
-          {/* Bottom layer: Annotated Recon Image */}
-          <img
-            src={afterUrl}
-            alt="Annotated After"
-            style={{ width: "100%", display: "block", pointerEvents: "none" }}
-          />
+          {/* Bottom layer: aligned recon (clean, boxes come from the overlay) */}
+          <SafeImg src={alignedUrl} alt="Aligned recon" className="layer-base" />
+          {heatmapLayer}
 
-          {/* Optional Heatmap blend */}
-          {showHeatmapOverlay && heatmapUrl && (
-            <img
-              src={heatmapUrl}
-              alt="Heatmap overlay"
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "contain",
-                opacity: heatmapOpacity,
-                mixBlendMode: "screen",
-                pointerEvents: "none",
-              }}
-            />
-          )}
-
-          {/* Top layer: Before Image clipped */}
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              clipPath: `polygon(0 0, ${sliderPos}% 0, ${sliderPos}% 100%, 0 100%)`,
-              pointerEvents: "none",
-            }}
-          >
-            <img
-              src={beforeUrl}
-              alt="Baseline Before"
-              style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
-            />
+          {/* Top layer: baseline clipped to the left of the divider */}
+          <div className="layer-fill" style={{ clipPath: `inset(0 ${100 - sliderPos}% 0 0)` }}>
+            <SafeImg src={beforeUrl} alt="Baseline" className="layer-fill" />
           </div>
 
-          {/* Interactive Boxes Overlay Layer */}
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none" }}>
-            {data.result.changes.map((c, idx) => {
-              const isSelected = selectedIndex === idx;
-              const ymin = c.box[0] / 10;
-              const xmin = c.box[1] / 10;
-              const ymax = c.box[2] / 10;
-              const xmax = c.box[3] / 10;
-              return (
-                <div
-                  key={idx}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelectIndex(isSelected ? null : idx);
-                  }}
-                  style={{
-                    position: "absolute",
-                    top: `${ymin}%`,
-                    left: `${xmin}%`,
-                    width: `${xmax - xmin}%`,
-                    height: `${ymax - ymin}%`,
-                    pointerEvents: "auto",
-                    cursor: "pointer",
-                    border: isSelected ? "3px solid #00f0ff" : "1px solid rgba(255, 255, 255, 0.2)",
-                    boxShadow: isSelected ? "0 0 20px #00f0ff, inset 0 0 12px rgba(0, 240, 255, 0.3)" : "none",
-                    borderRadius: "2px",
-                    transition: "all 0.15s ease",
-                  }}
-                >
-                  {isSelected && (
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: "-26px",
-                        left: "0",
-                        background: "#00f0ff",
-                        color: "#000",
-                        fontSize: "0.72rem",
-                        fontFamily: "var(--font-mono)",
-                        fontWeight: 700,
-                        padding: "2px 6px",
-                        borderRadius: "3px",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      SELECTED TARGET #{idx + 1}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+          <BoxOverlay changes={changes} selectedIndex={selectedIndex} outlined />
 
-          {/* Draggable Divider Handle */}
+          {/* Divider */}
           <div
             id="slider-divider-handle"
-            onMouseDown={handlePointerDown}
-            onTouchStart={handlePointerDown}
-            style={{
-              position: "absolute",
-              top: 0,
-              bottom: 0,
-              left: `${sliderPos}%`,
-              transform: "translateX(-50%)",
-              width: "4px",
-              background: "var(--accent-cyan)",
-              cursor: "ew-resize",
-              boxShadow: "0 0 12px var(--accent-cyan)",
-            }}
+            className="slider-handle"
+            style={{ left: `${sliderPos}%` }}
+            role="slider"
+            tabIndex={0}
+            aria-label="Before/after divider"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(sliderPos)}
+            onKeyDown={onHandleKey}
           >
-            <div
-              style={{
-                position: "absolute",
-                top: "50%",
-                left: "50%",
-                transform: "translate(-50%, -50%)",
-                width: "36px",
-                height: "36px",
-                borderRadius: "50%",
-                background: "#0f172a",
-                border: "2px solid var(--accent-cyan)",
-                boxShadow: "0 0 16px rgba(6, 182, 212, 0.8)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "0.75rem",
-                color: "var(--accent-cyan)",
-              }}
-            >
-              ↔
-            </div>
+            <div className="slider-knob">↔</div>
           </div>
 
-          {/* Left/Right floating labels */}
-          <div
-            style={{
-              position: "absolute",
-              top: "12px",
-              left: "14px",
-              background: "rgba(15, 23, 42, 0.8)",
-              border: "1px solid var(--border-subtle)",
-              padding: "4px 10px",
-              borderRadius: "6px",
-              fontSize: "0.74rem",
-              fontFamily: "var(--font-mono)",
-              color: "var(--text-muted)",
-              pointerEvents: "none",
-            }}
-          >
-            ◀ BASELINE (PAST)
-          </div>
-          <div
-            style={{
-              position: "absolute",
-              top: "12px",
-              right: "14px",
-              background: "rgba(15, 23, 42, 0.8)",
-              border: "1px solid var(--border-subtle)",
-              padding: "4px 10px",
-              borderRadius: "6px",
-              fontSize: "0.74rem",
-              fontFamily: "var(--font-mono)",
-              color: "var(--accent-cyan)",
-              pointerEvents: "none",
-            }}
-          >
-            RECON & ANNOTATIONS ▶
-          </div>
+          <div className="frame-label left">◀ BASELINE (PAST)</div>
+          <div className="frame-label right accent">RECON (ALIGNED) ▶</div>
         </div>
       )}
 
-      {mode === "annotated" && (
-        <div
-          style={{
-            position: "relative",
-            width: "100%",
-            borderRadius: "10px",
-            overflow: "hidden",
-            background: "#030712",
-            border: "1px solid var(--border-subtle)",
-          }}
-        >
-          <img src={afterUrl} alt="Annotated Output" style={{ width: "100%", display: "block" }} />
-
-          {/* Optional Heatmap blend */}
-          {showHeatmapOverlay && heatmapUrl && (
-            <img
-              src={heatmapUrl}
-              alt="Heatmap overlay"
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "contain",
-                opacity: heatmapOpacity,
-                mixBlendMode: "screen",
-                pointerEvents: "none",
-              }}
-            />
-          )}
-
-          {/* Interactive target overlay boxes */}
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, pointerEvents: "none" }}>
-            {data.result.changes.map((c, idx) => {
-              const isSelected = selectedIndex === idx;
-              const ymin = c.box[0] / 10;
-              const xmin = c.box[1] / 10;
-              const ymax = c.box[2] / 10;
-              const xmax = c.box[3] / 10;
-              return (
-                <div
-                  key={idx}
-                  id={`annotated-box-${idx}`}
-                  onClick={() => onSelectIndex(isSelected ? null : idx)}
-                  style={{
-                    position: "absolute",
-                    top: `${ymin}%`,
-                    left: `${xmin}%`,
-                    width: `${xmax - xmin}%`,
-                    height: `${ymax - ymin}%`,
-                    pointerEvents: "auto",
-                    cursor: "pointer",
-                    border: isSelected ? "3px solid #00f0ff" : "1px solid transparent",
-                    boxShadow: isSelected ? "0 0 20px #00f0ff, inset 0 0 10px rgba(0, 240, 255, 0.4)" : "none",
-                    borderRadius: "2px",
-                    transition: "all 0.15s ease",
-                  }}
-                />
-              );
-            })}
-          </div>
+      {view === "annotated" && (
+        <div className="image-frame">
+          <SafeImg src={annotatedUrl} alt="Annotated output" className="layer-base" />
+          {heatmapLayer}
+          <BoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} outlined={false} />
         </div>
       )}
 
-      {mode === "side_by_side" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+      {view === "side_by_side" && (
+        <div className="split-view">
           <div>
-            <div style={{ fontSize: "0.78rem", fontFamily: "var(--font-mono)", color: "var(--text-muted)", marginBottom: "6px" }}>
-              IMAGE A (BASELINE)
-            </div>
-            <div style={{ borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-subtle)", background: "#050811" }}>
-              <img src={beforeUrl} alt="Baseline" style={{ width: "100%", display: "block" }} />
+            <div className="split-label mono">IMAGE A (BASELINE)</div>
+            <div className="image-frame">
+              <SafeImg src={beforeUrl} alt="Baseline" className="layer-base" />
             </div>
           </div>
           <div>
-            <div style={{ fontSize: "0.78rem", fontFamily: "var(--font-mono)", color: "var(--accent-cyan)", marginBottom: "6px" }}>
-              IMAGE B (ALIGNED & ANNOTATED)
-            </div>
-            <div style={{ borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-subtle)", background: "#050811" }}>
-              <img src={afterUrl} alt="Annotated" style={{ width: "100%", display: "block" }} />
+            <div className="split-label mono accent">IMAGE B (ALIGNED &amp; ANNOTATED)</div>
+            <div className="image-frame">
+              <SafeImg src={annotatedUrl} alt="Annotated" className="layer-base" />
+              <BoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} outlined={false} />
             </div>
           </div>
         </div>
       )}
 
-      {mode === "heatmap" && heatmapUrl && (
-        <div style={{ borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border-subtle)", background: "#050811", textAlign: "center" }}>
-          <img src={heatmapUrl} alt="Diff Change Heatmap" style={{ width: "100%", display: "block" }} />
+      {view === "heatmap" && heatmapUrl && (
+        <div className="image-frame">
+          <SafeImg src={heatmapUrl} alt="Change heatmap" className="layer-base" />
+          <BoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} outlined />
         </div>
       )}
     </div>

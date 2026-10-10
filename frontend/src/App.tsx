@@ -1,5 +1,13 @@
-import React, { useState, useEffect } from "react";
-import { analyze, fetchJobsHistory, type JobProgress, type JobHistoryItem } from "./api";
+import { Fragment, useEffect, useRef, useState } from "react";
+import {
+  analyze,
+  checkHealth,
+  fetchJobsHistory,
+  jobToResponse,
+  CancelledError,
+  type JobProgress,
+  type JobHistoryItem,
+} from "./api";
 import type { AnalyzeResponse } from "./types";
 import UploadPanel from "./components/UploadPanel";
 import ResultViewer from "./components/ResultViewer";
@@ -15,6 +23,22 @@ const STAGE_LABELS: Record<string, string> = {
   error: "Error",
 };
 
+// Progress steps shown in the bar, and the key each one uses in `timings` (backend/app/pipeline.py).
+const STAGES = [
+  { stage: "queued", timing: null },
+  { stage: "aligning", timing: "align" },
+  { stage: "heatmap", timing: "heatmap" },
+  { stage: "ai", timing: "ai" },
+  { stage: "render", timing: "render" },
+] as const;
+const STAGE_ORDER = [...STAGES.map((s) => s.stage as string), "done"];
+
+const HEALTH_INTERVAL_MS = 15000;
+
+function isOfflineResult(r: AnalyzeResponse): boolean {
+  return (r.warnings || []).some((w) => /offline|fixture|mock_llm/i.test(w));
+}
+
 export default function App() {
   const [data, setData] = useState<AnalyzeResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -26,15 +50,31 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [history, setHistory] = useState<JobHistoryItem[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [offlineMode, setOfflineMode] = useState(false);
+  const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  // Incremented per analysis; a run whose id is no longer current is ignored (cancel / re-submit).
+  const runId = useRef(0);
+
+  useEffect(() => {
+    let alive = true;
+    const ping = () => checkHealth().then((ok) => alive && setBackendUp(ok));
+    ping();
+    const t = window.setInterval(ping, HEALTH_INTERVAL_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, []);
 
   async function handleAnalyze(a: File | Blob, b: File | Blob, criteria: string, language: string, drawGrid: boolean) {
+    const myRun = ++runId.current;
+    const isCancelled = () => runId.current !== myRun;
+
     setLoading(true);
     setError(null);
     setSelectedIndex(null);
     setStage("queued");
     setStageDurations({});
-    setOfflineMode(false);
+    setShowHistory(false);
 
     try {
       const response = await analyze(
@@ -42,65 +82,54 @@ export default function App() {
         (progress: JobProgress) => {
           setStage(progress.stage);
           if (progress.timings) setStageDurations({ ...progress.timings });
-        }
+        },
+        isCancelled
       );
-
-      // Detect if mock / offline mode was used
-      const warnings = response.warnings || [];
-      if (warnings.some(w => w.toLowerCase().includes("offline") || w.toLowerCase().includes("fixture"))) {
-        setOfflineMode(true);
-      }
-      if (!response.result || !response.images?.annotated_url) {
-        setOfflineMode(true);
-      }
-
+      if (isCancelled()) return;
       setData(response);
+      setBackendUp(true);
     } catch (e: any) {
-      setError(e.message || String(e));
+      if (e instanceof CancelledError || isCancelled()) return;
+      setError(e?.message || String(e));
     } finally {
-      setLoading(false);
-      setStage("");
+      if (!isCancelled()) {
+        setLoading(false);
+        setStage("");
+      }
     }
+  }
+
+  function handleCancel() {
+    runId.current++; // the in-flight poll sees this and stops; the backend job finishes on its own
+    setLoading(false);
+    setStage("");
   }
 
   function handleOpenHistory(job: JobHistoryItem) {
     if (job.status !== "done" || !job.result) return;
-    const response: AnalyzeResponse = {
-      job_id: job.job_id,
-      result: job.result,
-      align_quality: job.align_quality ?? 0,
-      align_ok: Boolean(job.align_ok),
-      align_method: (job.align_method as any) || "none",
-      images: {
-        aligned_b_url: job.images?.aligned_b_url || "",
-        annotated_url: job.images?.annotated_url || "",
-        image_a_url: job.images?.image_a_url,
-        heatmap_url: job.images?.heatmap_url,
-      },
-      timings: job.timings,
-      warnings: job.warnings,
-    };
-    setData(response);
+    setData(jobToResponse(job));
     setSelectedIndex(null);
     setShowHistory(false);
   }
 
-  async function handleLoadHistory() {
+  async function handleToggleHistory() {
+    if (showHistory) {
+      setShowHistory(false);
+      return;
+    }
     setLoadingHistory(true);
     try {
-      const items = await fetchJobsHistory(30);
-      setHistory(items);
+      setHistory(await fetchJobsHistory(30));
       setShowHistory(true);
-    } catch (e) {
-      console.warn("History load failed:", e);
+    } catch (e: any) {
+      setError(e?.message || "Failed to load mission history");
     } finally {
       setLoadingHistory(false);
     }
   }
 
-  // Current active stage index for progress bar
-  const STAGES_ORDER = ["queued", "aligning", "heatmap", "ai", "render", "done"];
-  const currentStageIdx = STAGES_ORDER.indexOf(stage);
+  const currentStageIdx = STAGE_ORDER.indexOf(stage);
+  const offlineMode = data !== null && !loading && isOfflineResult(data);
 
   return (
     <div className="app-container">
@@ -117,150 +146,95 @@ export default function App() {
         </div>
 
         <div className="header-actions">
-          {/* Mission History button */}
           <button
             id="history-btn"
             type="button"
-            className="btn-secondary"
-            onClick={handleLoadHistory}
+            className="btn-secondary small"
+            onClick={handleToggleHistory}
             disabled={loadingHistory}
-            style={{ fontSize: "0.8rem" }}
+            aria-expanded={showHistory}
           >
-            {loadingHistory ? "Loading…" : "📂 Mission History"}
+            {loadingHistory ? "Loading…" : showHistory ? "✕ Close History" : "📂 Mission History"}
           </button>
-          <div className="system-status">
+          <div className={`system-status ${backendUp === false ? "down" : ""}`} title="Backend health (GET /api/health)">
             <span className="status-pulse" />
-            <span>OPERATIONAL</span>
+            <span>{backendUp === null ? "CONNECTING" : backendUp ? "OPERATIONAL" : "BACKEND OFFLINE"}</span>
           </div>
         </div>
       </header>
 
       {/* OFFLINE MODE banner */}
       {offlineMode && (
-        <div style={{
-          background: "rgba(245, 158, 11, 0.1)",
-          border: "1px solid rgba(245, 158, 11, 0.4)",
-          color: "#fef3c7",
-          padding: "10px 18px",
-          borderRadius: "8px",
-          marginBottom: "20px",
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          fontSize: "0.88rem",
-        }}>
+        <div className="info-banner">
           <span style={{ fontSize: "1.2rem" }}>🔌</span>
-          <strong>OFFLINE MODE (FIXTURE)</strong> — Gemini API unavailable. Results from local fixture data.
+          <span>
+            <strong>OFFLINE MODE (FIXTURE)</strong> — Gemini not used. Results come from local fixture data.
+          </span>
         </div>
       )}
 
       {/* Mission History Drawer */}
       {showHistory && (
-        <div className="glass-panel" style={{ padding: "20px", marginBottom: "24px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+        <div className="glass-panel panel">
+          <div className="section-head">
             <h2 style={{ fontSize: "1rem", fontWeight: 700 }}>📂 Mission History</h2>
-            <button type="button" onClick={() => setShowHistory(false)} className="btn-secondary" style={{ fontSize: "0.8rem" }}>
+            <button type="button" onClick={() => setShowHistory(false)} className="btn-secondary small">
               ✕ Close
             </button>
           </div>
           {history.length === 0 ? (
-            <div style={{ color: "var(--text-dim)", textAlign: "center", padding: "20px", fontSize: "0.88rem" }}>
-              No completed missions found.
-            </div>
+            <div className="empty-state">No missions found.</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              {history.map((job) => (
-                <div
-                  key={job.job_id}
-                  onClick={() => handleOpenHistory(job)}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "auto 1fr auto auto",
-                    alignItems: "center",
-                    gap: "12px",
-                    padding: "10px 14px",
-                    background: "rgba(15, 23, 42, 0.6)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "8px",
-                    cursor: job.status === "done" ? "pointer" : "default",
-                    opacity: job.status === "done" ? 1 : 0.55,
-                    transition: "border-color 0.15s ease",
-                  }}
-                >
-                  {/* Status dot */}
-                  <span style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    background: job.status === "done" ? "var(--accent-emerald)"
-                      : job.status === "error" ? "var(--accent-red)"
-                      : "var(--accent-amber)",
-                    flexShrink: 0,
-                  }} />
-
-                  <div>
-                    <div style={{ fontSize: "0.84rem", fontWeight: 600, marginBottom: "2px" }}>
-                      {job.criteria || "Untitled mission"}
+            <div className="history-list">
+              {history.map((job) => {
+                const openable = job.status === "done" && Boolean(job.result);
+                return (
+                  <div
+                    key={job.job_id}
+                    className={`history-row${openable ? " openable" : ""}`}
+                    role={openable ? "button" : undefined}
+                    tabIndex={openable ? 0 : undefined}
+                    title={job.status === "error" ? job.error_message || "Failed" : undefined}
+                    onClick={() => handleOpenHistory(job)}
+                    onKeyDown={(e) => {
+                      if (openable && (e.key === "Enter" || e.key === " ")) {
+                        e.preventDefault();
+                        handleOpenHistory(job);
+                      }
+                    }}
+                  >
+                    <span className={`history-dot ${job.status}`} />
+                    <div style={{ minWidth: 0 }}>
+                      <div className="history-title">{job.criteria || "Untitled mission"}</div>
+                      <div className="mono dim xsmall">
+                        {new Date(job.created_at + "Z").toLocaleString()}
+                        {job.changes_count != null && ` • ${job.changes_count} target(s)`}
+                        {` • ${job.lang?.toUpperCase() || "EN"}`}
+                        {job.status === "error" && " • FAILED"}
+                        {(job.status === "queued" || job.status === "running") && ` • ${job.stage.toUpperCase()}`}
+                      </div>
                     </div>
-                    <div style={{ fontSize: "0.72rem", fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>
-                      {new Date(job.created_at + "Z").toLocaleString()} •
-                      {job.changes_count != null && ` ${job.changes_count} target(s) •`} {job.lang?.toUpperCase() || "EN"}
-                    </div>
+                    <span className="mono dim xsmall">#{job.job_id.slice(0, 8)}</span>
+                    {openable && <span className="history-open">Open →</span>}
                   </div>
-
-                  <span style={{
-                    fontSize: "0.72rem",
-                    fontFamily: "var(--font-mono)",
-                    color: "var(--text-dim)",
-                  }}>
-                    #{job.job_id.slice(0, 8)}
-                  </span>
-
-                  {job.status === "done" && (
-                    <span style={{ fontSize: "0.75rem", color: "var(--accent-cyan)" }}>
-                      Open →
-                    </span>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
       )}
 
       {/* Main Upload / Config Panel */}
-      <UploadPanel
-        onSubmit={handleAnalyze}
-        loading={loading}
-        lang={lang}
-        onLangChange={setLang}
-      />
+      <UploadPanel onSubmit={handleAnalyze} onError={setError} loading={loading} lang={lang} onLangChange={setLang} />
 
       {/* Error notification */}
       {error && (
-        <div
-          id="error-banner"
-          style={{
-            background: "rgba(239, 68, 68, 0.1)",
-            border: "1px solid rgba(239, 68, 68, 0.4)",
-            color: "#fca5a5",
-            padding: "14px 20px",
-            borderRadius: "8px",
-            marginBottom: "24px",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+        <div id="error-banner" className="error-banner" role="alert">
+          <div className="error-banner-body">
             <span style={{ fontSize: "1.2rem" }}>⛔</span>
             <span>{error}</span>
           </div>
-          <button
-            type="button"
-            onClick={() => setError(null)}
-            style={{ background: "none", border: "none", color: "#fca5a5", cursor: "pointer", fontSize: "1.1rem" }}
-          >
+          <button type="button" className="icon-btn" aria-label="Dismiss error" onClick={() => setError(null)}>
             ✕
           </button>
         </div>
@@ -268,7 +242,7 @@ export default function App() {
 
       {/* Live Stage Progress */}
       {loading && (
-        <div className="glass-panel scanner-overlay" style={{ padding: "28px 36px", marginBottom: "28px" }}>
+        <div className="glass-panel panel scanner-overlay" aria-live="polite">
           <div style={{ textAlign: "center", marginBottom: "20px" }}>
             <div style={{ fontSize: "2rem", marginBottom: "10px" }}>📡</div>
             <h3 style={{ fontSize: "1.1rem", fontWeight: 700, letterSpacing: "0.04em", marginBottom: "6px" }}>
@@ -276,87 +250,47 @@ export default function App() {
             </h3>
           </div>
 
-          {/* Stage Step Bar */}
-          <div style={{ display: "flex", alignItems: "center", gap: "4px", marginBottom: "16px", justifyContent: "center" }}>
-            {STAGES_ORDER.filter(s => s !== "done").map((s, idx) => {
+          <div className="stage-bar">
+            {STAGES.map(({ stage: s, timing }, idx) => {
               const isActive = s === stage;
               const isDone = currentStageIdx > idx;
+              const secs = timing ? stageDurations[timing] : undefined;
               return (
-                <React.Fragment key={s}>
-                  <div style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: "4px",
-                    minWidth: "72px",
-                  }}>
-                    <div style={{
-                      width: "28px",
-                      height: "28px",
-                      borderRadius: "50%",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: "0.75rem",
-                      fontWeight: 700,
-                      background: isDone ? "var(--accent-emerald)"
-                        : isActive ? "var(--accent-cyan)"
-                        : "rgba(30, 41, 59, 0.8)",
-                      color: isDone || isActive ? "#000" : "var(--text-dim)",
-                      border: isActive ? "2px solid var(--accent-cyan)" : "1px solid var(--border-subtle)",
-                      boxShadow: isActive ? "0 0 10px var(--accent-cyan)" : "none",
-                      transition: "all 0.3s ease",
-                    }}>
-                      {isDone ? "✓" : idx + 1}
-                    </div>
-                    <span style={{ fontSize: "0.65rem", fontFamily: "var(--font-mono)", color: isActive ? "var(--accent-cyan)" : "var(--text-dim)", textAlign: "center", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                      {s}
-                    </span>
-                    {stageDurations[s] && (
-                      <span style={{ fontSize: "0.6rem", color: "var(--accent-emerald)", fontFamily: "var(--font-mono)" }}>
-                        {stageDurations[s].toFixed(2)}s
-                      </span>
-                    )}
+                <Fragment key={s}>
+                  <div className="stage-step">
+                    <div className={`stage-dot${isDone ? " done" : isActive ? " active" : ""}`}>{isDone ? "✓" : idx + 1}</div>
+                    <span className={`stage-name${isActive ? " active" : ""}`}>{s}</span>
+                    {secs != null && <span className="stage-time">{secs.toFixed(2)}s</span>}
                   </div>
-                  {idx < STAGES_ORDER.filter(s => s !== "done").length - 1 && (
-                    <div style={{
-                      flex: 1,
-                      height: "2px",
-                      background: isDone ? "var(--accent-emerald)" : "var(--border-subtle)",
-                      transition: "background 0.3s ease",
-                    }} />
-                  )}
-                </React.Fragment>
+                  {idx < STAGES.length - 1 && <div className={`stage-link${isDone ? " done" : ""}`} />}
+                </Fragment>
               );
             })}
           </div>
 
-          <p style={{ color: "var(--text-muted)", fontSize: "0.84rem", textAlign: "center", fontFamily: "var(--font-mono)" }}>
+          <p className="mono muted small" style={{ textAlign: "center", marginBottom: "14px" }}>
             {STAGE_LABELS[stage] || "Initializing…"}
           </p>
+          <div style={{ textAlign: "center" }}>
+            <button type="button" className="btn-secondary small" onClick={handleCancel}>
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 
       {/* Analysis Results */}
       {data && !loading && (
         <>
-          <ResultViewer
-            data={data}
-            selectedIndex={selectedIndex}
-            onSelectIndex={setSelectedIndex}
-          />
-          <ReportPanel
-            data={data}
-            selectedIndex={selectedIndex}
-            onSelectIndex={setSelectedIndex}
-          />
+          <ResultViewer key={data.job_id} data={data} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} />
+          <ReportPanel data={data} selectedIndex={selectedIndex} onSelectIndex={setSelectedIndex} />
         </>
       )}
 
       {/* Footer */}
-      <footer style={{ marginTop: "48px", paddingTop: "20px", borderTop: "1px solid var(--border-subtle)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", fontSize: "0.78rem", color: "var(--text-dim)" }}>
+      <footer className="app-footer">
         <div>Žvalgas AI • Aerial Reconnaissance &amp; Change Detection System</div>
-        <div style={{ fontFamily: "var(--font-mono)" }}>[0–1000] Bounding Coordinates • OpenCV + Gemini 2.5</div>
+        <div className="mono">[0–1000] Bounding Coordinates • OpenCV + Gemini 2.5</div>
       </footer>
     </div>
   );

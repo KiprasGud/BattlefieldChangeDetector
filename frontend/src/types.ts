@@ -32,4 +32,5 @@ export interface AnalyzeResponse {
   };
   timings?: Record<string, number>;
   warnings?: string[];
+  lang?: string; // set from the job record (GET /api/jobs/{id}), not sent by sync /api/analyze
 }

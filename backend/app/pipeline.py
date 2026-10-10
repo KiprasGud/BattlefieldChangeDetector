@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from .alignment import align
-from .analysis import analyze
+from .analysis import analyze, use_mock
 from .contracts import AnalyzeResponse
 from .render import annotate
 
@@ -33,7 +33,9 @@ def run(
     draw_grid: bool = False,
     job_id: Optional[str] = None,
     stage_callback: Optional[Callable[[str, Optional[dict[str, float]]], None]] = None,
+    meta: Optional[dict] = None,
 ) -> AnalyzeResponse:
+    """meta: optional dict filled with extra job info not in the frozen contract (align_method)."""
     t_start = time.perf_counter()
     timings: dict[str, float] = {}
     warnings: list[str] = []
@@ -56,6 +58,8 @@ def run(
     timings["align"] = round(time.perf_counter() - t0, 3)
 
     method = getattr(aligned, "method", "none")
+    if meta is not None:
+        meta["align_method"] = method
     if not aligned.ok:
         warnings.append(f"Alignment degraded: low quality score ({aligned.quality:.2f}).")
     if method == "ecc":
@@ -91,7 +95,9 @@ def run(
     if stage_callback:
         stage_callback("ai", timings)
     t0 = time.perf_counter()
-    offline = False
+    offline = use_mock()
+    if offline:
+        warnings.append("OFFLINE MODE: MOCK_LLM=1 or no GEMINI_API_KEY. Using fixture data.")
     try:
         sig = inspect.signature(analyze)
         if "hints" in sig.parameters and hints is not None:
@@ -102,7 +108,7 @@ def run(
         # Automatic offline fallback: switch to mock fixture when Gemini fails
         try:
             from .analysis.mock import analyze_mock
-            result = analyze_mock(img_a, aligned.aligned_b, criteria)
+            result = analyze_mock(img_a, aligned.aligned_b, criteria, lang)
             offline = True
             warnings.append(f"OFFLINE MODE: Gemini API unavailable ({type(e).__name__}). Using fixture data.")
         except Exception as fallback_err:
