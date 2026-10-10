@@ -3,6 +3,7 @@ import { analyze, checkHealth, fetchPresets, CancelledError, type JobProgress, t
 import type { AnalyzeResponse } from "./types";
 import ResultViewer from "./components/ResultViewer";
 import ReviewDashboard from "./components/ReviewDashboard";
+import { errorText, isTyping, saveText, targetId } from "./util";
 
 const HEALTH_INTERVAL_MS = 15000;
 const MAX_LOGS = 200; // older log lines are dropped
@@ -21,13 +22,6 @@ const logLine = (msg: string): LogLine => ({
   msg,
   level: msg.includes("[WARN]") || msg.includes("[ERR]") ? "warn" : msg.includes("[SUCCESS]") ? "success" : "info",
 });
-
-const isTyping = (t: EventTarget | null) => {
-  const el = t as HTMLElement | null;
-  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
-};
-
-const trgt = (i: number) => `TRGT-${String(i + 1).padStart(2, "0")}`;
 
 const escapeXml = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -87,7 +81,7 @@ export default function App() {
   useEffect(() => {
     fetchPresets()
       .then(setPresets)
-      .catch((e) => addLog(`[ERR] TARGET CLASSES UNAVAILABLE: ${e?.message || e}`));
+      .catch((e) => addLog(`[ERR] TARGET CLASSES UNAVAILABLE: ${errorText(e)}`));
   }, []);
 
   useEffect(() => {
@@ -250,10 +244,11 @@ export default function App() {
       setData(response);
       response.warnings?.forEach(w => addLog(`[WARN] ${w}`));
       addLog(`[SUCCESS] Analysis complete. Targets found: ${response.result.changes.length}`);
-    } catch (e: any) {
+    } catch (e) {
       if (e instanceof CancelledError || isCancelled()) return;
-      setError(e?.message || String(e));
-      addLog(`[ERR] EXECUTION FAILED: ${e?.message || String(e)}`);
+      const message = errorText(e);
+      setError(message);
+      addLog(`[ERR] EXECUTION FAILED: ${message}`);
     } finally {
       if (!isCancelled()) {
         setLoading(false);
@@ -269,15 +264,16 @@ export default function App() {
     const timeStr = now.toISOString();
     const staleStr = new Date(now.getTime() + 10 * 60000).toISOString();
 
+    // CoT type: hostile ground unit when vehicle classes were searched, generic hostile ground otherwise
+    const cotType = criteria.includes("vehicles") || criteria.includes("tracks") ? "a-h-G-U-C" : "a-h-G";
+
     let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<events>\n`;
     data.result.changes.forEach((c, i) => {
       const uid = `ZVALGAS-${data.job_id}-TRGT-${i+1}`;
-      // CoT type: hostile ground unit when vehicle classes were searched, generic hostile ground otherwise
-      const cotType = criteria.includes("vehicles") || criteria.includes("tracks") ? "a-h-G-U-C" : "a-h-G";
       xml += `  <event version="2.0" uid="${uid}" type="${cotType}" time="${timeStr}" start="${timeStr}" stale="${staleStr}" how="m-g">\n`;
       xml += `    <point lat="0.0" lon="0.0" hae="0.0" ce="9999" le="9999" />\n`;
       xml += `    <detail>\n`;
-      xml += `      <contact callsign="${trgt(i)}" />\n`;
+      xml += `      <contact callsign="${targetId(i)}" />\n`;
       xml += `      <remarks>${escapeXml(c.type)} | Bounds: [${c.box.map(Math.round).join(', ')}]</remarks>\n`;
       xml += `    </detail>\n`;
       xml += `  </event>\n`;
@@ -288,13 +284,7 @@ export default function App() {
 
   const handleExportXML = () => {
     if (!data || !xmlPreview) return;
-    const blob = new Blob([xmlPreview], { type: "text/xml" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `zvalgas_export_${data.job_id}.xml`;
-    a.click();
-    URL.revokeObjectURL(url);
+    saveText(xmlPreview, "text/xml", `zvalgas_export_${data.job_id}.xml`);
     addLog("[SYS] XML Payload generated & downloaded.");
   };
 
@@ -304,18 +294,12 @@ export default function App() {
       job_id: data.job_id,
       timestamp: new Date().toISOString(),
       targets: data.result.changes.map((c, i) => ({
-        id: trgt(i),
+        id: targetId(i),
         label: c.type,
         box: c.box
       }))
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `zvalgas_export_${data.job_id}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    saveText(JSON.stringify(payload, null, 2), "application/json", `zvalgas_export_${data.job_id}.json`);
     addLog("[SYS] JSON Payload generated & downloaded.");
   };
 
@@ -470,7 +454,7 @@ export default function App() {
                 <>
                   <div className="log-entry">
                     <span className="log-time">TRGT-ID:</span>
-                    <span>{trgt(selectedChangeIdx)}</span>
+                    <span>{targetId(selectedChangeIdx)}</span>
                   </div>
                   <div className="log-entry">
                     <span className="log-time">LABEL:</span>
@@ -518,7 +502,7 @@ export default function App() {
                     title={c.description}
                     onClick={() => setSelectedChangeIdx(selectedChangeIdx === i ? null : i)}
                   >
-                    <span className="mono">{trgt(i)}</span>
+                    <span className="mono">{targetId(i)}</span>
                     <span className="target-row-label">{c.type}</span>
                   </button>
                 ))}

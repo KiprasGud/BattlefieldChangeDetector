@@ -1,4 +1,5 @@
 """PERSON 3: orchestrates align -> diff/heatmap -> analyze -> annotate."""
+import logging
 import time
 import uuid
 from datetime import date
@@ -15,6 +16,8 @@ from .contracts import AlignResult, AnalysisResult, AnalyzeResponse, Change
 from .render import annotate
 from .settings import ai_enabled
 
+log = logging.getLogger(__name__)
+
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "output"
 
 
@@ -27,7 +30,7 @@ def decode(data: bytes, label: str = "image") -> np.ndarray:
     return img
 
 
-def is_mirrored(homography) -> bool:
+def is_mirrored(homography: Optional[list[list[float]]]) -> bool:
     return homography is not None and np.linalg.det(np.asarray(homography, np.float64)[:2, :2]) < 0
 
 
@@ -100,6 +103,7 @@ def run(
     meta: Optional[dict] = None,
 ) -> AnalyzeResponse:
     """meta: optional dict filled with extra job info not in the frozen contract (align_method)."""
+    stage = stage_callback or (lambda *_: None)
     t_start = time.perf_counter()
     timings: dict[str, float] = {}
     warnings: list[str] = []
@@ -115,8 +119,7 @@ def run(
     cv2.imwrite(str(job_dir / "image_a.jpg"), img_a)
 
     # Stage 1: Aligning
-    if stage_callback:
-        stage_callback("aligning", timings)
+    stage("aligning", timings)
     t0 = time.perf_counter()
     aligned = align(img_a, img_b)
     timings["align"] = round(time.perf_counter() - t0, 3)
@@ -141,8 +144,7 @@ def run(
     cv2.imwrite(str(job_dir / "aligned_b.jpg"), aligned.aligned_b)
 
     # Stage 2: Heatmap (visual aid only: detection is the AI's job, OpenCV only aligns)
-    if stage_callback:
-        stage_callback("heatmap", timings)
+    stage("heatmap", timings)
     t0 = time.perf_counter()
     heat_map, _ = compute_heatmap(img_a, img_b, aligned)
     if heat_map is not None:
@@ -150,12 +152,11 @@ def run(
             cv2.imwrite(str(job_dir / "heatmap.jpg"), heatmap_image(heat_map))
             images["heatmap_url"] = f"/api/files/{job_id}/heatmap.jpg"
         except Exception:
-            pass
+            log.warning("Job %s: could not write the heatmap image", job_id, exc_info=True)
     timings["heatmap"] = round(time.perf_counter() - t0, 3)
 
     # Stage 3: AI Analysis (with automatic offline fallback), skipped when the AI step is switched off
-    if stage_callback:
-        stage_callback("ai", timings)
+    stage("ai", timings)
     t0 = time.perf_counter()
     if not ai_enabled():
         result = AnalysisResult(
@@ -183,10 +184,8 @@ def run(
                 raise RuntimeError(f"Both Gemini and mock fallback failed: {fallback_err}") from e
     timings["ai"] = round(time.perf_counter() - t0, 3)
 
-
     # Stage 4: Render
-    if stage_callback:
-        stage_callback("render", timings)
+    stage("render", timings)
     t0 = time.perf_counter()
     annotated = annotate(aligned.aligned_b, result, draw_grid=draw_grid)
     cv2.imwrite(str(job_dir / "annotated.jpg"), annotated)
@@ -194,8 +193,7 @@ def run(
     timings["render"] = round(time.perf_counter() - t0, 3)
 
     timings["total"] = round(time.perf_counter() - t_start, 3)
-    if stage_callback:
-        stage_callback("done", timings)
+    stage("done", timings)
 
     return AnalyzeResponse(
         job_id=job_id,

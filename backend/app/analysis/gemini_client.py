@@ -171,7 +171,9 @@ def _image_part(img: np.ndarray, max_side: int = MAX_SIDE, detail: str = "HIGH")
     return types.Part.from_bytes(data=data, mime_type="image/jpeg", media_resolution=level)
 
 
-def verify_changes(client, img_a, aligned_b, criteria: str, result: AnalysisResult) -> AnalysisResult:
+def verify_changes(
+    client, img_a: np.ndarray, aligned_b: np.ndarray, criteria: str, result: AnalysisResult
+) -> AnalysisResult:
     """Second pass: show crops of every detection and drop the ones the model rejects.
     Any failure keeps the detections unchanged (verification must never lose a result)."""
     candidates = result.changes[:MAX_VERIFY]
@@ -205,8 +207,8 @@ def verify_changes(client, img_a, aligned_b, criteria: str, result: AnalysisResu
 
 
 def analyze_with_gemini(
-    img_a,
-    aligned_b,
+    img_a: np.ndarray,
+    aligned_b: np.ndarray,
     criteria: str,
     lang: str = "en",
     hints: Optional[list[list[int]]] = None,

@@ -370,12 +370,6 @@ body {
   text-transform: uppercase;
 }
 
-.dropzone-files {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .file-status {
   display: flex;
   justify-content: space-between;
@@ -383,11 +377,6 @@ body {
   font-size: var(--fs-data);
   border: var(--border-width) solid var(--border-main);
   padding: 4px 6px;
-}
-
-.file-status.ready {
-  border-color: var(--accent-exec);
-  color: var(--accent-exec);
 }
 
 /* Scrollbars - Utilitarian */

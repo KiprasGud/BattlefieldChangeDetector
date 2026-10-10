@@ -1,14 +1,5 @@
 import type { AlignMethod, AnalysisResult, AnalyzeResponse, Category, Confidence } from "./types";
 
-export interface SamplePair {
-  id: string;
-  name: string;
-  description: string;
-  criteria: string;
-  image_a_url: string;
-  image_b_url: string;
-}
-
 export interface JobProgress {
   stage: string;
   timings: Record<string, number>;
@@ -64,14 +55,33 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
   return snippet ? `${fallback} (HTTP ${res.status}): ${snippet}` : `${fallback} (HTTP ${res.status})`;
 }
 
+async function getJson<T>(url: string, what: string): Promise<T> {
+  const res = await request(url);
+  if (!res.ok) throw new Error(await errorMessage(res, `Failed to load ${what}`));
+  return res.json();
+}
+
+async function sendJson<T>(url: string, method: string, body: unknown, what: string): Promise<T> {
+  const res = await request(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, what));
+  return res.json();
+}
+
+/** A stored align method as the AlignMethod union; anything else is "none". */
+export const toAlignMethod = (method?: string | null): AlignMethod =>
+  method === "sift" || method === "ecc" ? method : "none";
+
 export function jobToResponse(job: JobHistoryItem): AnalyzeResponse {
-  const method = job.align_method;
   return {
     job_id: job.job_id,
     result: job.result as AnalysisResult,
     align_quality: job.align_quality ?? 0,
     align_ok: Boolean(job.align_ok),
-    align_method: method === "sift" || method === "ecc" ? (method as AlignMethod) : "none",
+    align_method: toAlignMethod(job.align_method),
     images: {
       aligned_b_url: job.images?.aligned_b_url || "",
       annotated_url: job.images?.annotated_url || "",
@@ -97,11 +107,7 @@ export interface Preset {
   shortcut: string;
 }
 
-export async function fetchPresets(): Promise<Preset[]> {
-  const res = await request("/api/presets");
-  if (!res.ok) throw new Error(await errorMessage(res, "Failed to load target classes"));
-  return res.json();
-}
+export const fetchPresets = () => getJson<Preset[]>("/api/presets", "target classes");
 
 export async function submitJob(
   a: File | Blob,
@@ -124,11 +130,7 @@ export async function submitJob(
   return data.job_id;
 }
 
-export async function fetchJob(jobId: string): Promise<JobHistoryItem> {
-  const res = await request(`/api/jobs/${jobId}`);
-  if (!res.ok) throw new Error(await errorMessage(res, `Failed to load job ${jobId}`));
-  return res.json();
-}
+export const fetchJob = (jobId: string) => getJson<JobHistoryItem>(`/api/jobs/${jobId}`, `job ${jobId}`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -185,24 +187,6 @@ export async function analyze(
 ): Promise<AnalyzeResponse> {
   const jobId = await submitJob(a, b, criteria, lang, drawGrid);
   return pollJob(jobId, onProgress, isCancelled);
-}
-
-export async function fetchJobsHistory(limit: number = 30): Promise<JobHistoryItem[]> {
-  const res = await request(`/api/jobs?limit=${limit}`);
-  if (!res.ok) throw new Error(await errorMessage(res, "Failed to load mission history"));
-  return res.json();
-}
-
-export async function fetchSamples(): Promise<SamplePair[]> {
-  const res = await request("/api/samples");
-  if (!res.ok) throw new Error(await errorMessage(res, "Failed to load sample pairs"));
-  return res.json();
-}
-
-export async function fetchImageAsBlob(url: string): Promise<Blob> {
-  const res = await request(url);
-  if (!res.ok) throw new Error(await errorMessage(res, `Failed to fetch image ${url}`));
-  return res.blob();
 }
 
 export async function checkHealth(): Promise<boolean> {
@@ -360,22 +344,6 @@ export interface InboxGroup {
   files: string[];
   epochs: string[];
   batched: boolean;
-}
-
-async function getJson<T>(url: string, what: string): Promise<T> {
-  const res = await request(url);
-  if (!res.ok) throw new Error(await errorMessage(res, `Failed to load ${what}`));
-  return res.json();
-}
-
-async function sendJson<T>(url: string, method: string, body: unknown, what: string): Promise<T> {
-  const res = await request(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await errorMessage(res, what));
-  return res.json();
 }
 
 export const fetchSettings = () => getJson<PipelineSettings>("/api/settings", "settings");

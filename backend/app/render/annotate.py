@@ -14,6 +14,7 @@ CATEGORY_CODES = {
 }
 
 MAX_LABEL_CHARS = 32  # the AI label on a badge; longer ones end in "..."
+BADGE_FONT, BADGE_SCALE, BADGE_THICKNESS = cv2.FONT_HERSHEY_DUPLEX, 0.55, 1
 
 
 def badge_label(text: str, limit: int = MAX_LABEL_CHARS) -> str:
@@ -92,21 +93,12 @@ def annotate(img: np.ndarray, result: AnalysisResult, draw_grid: bool = False) -
         # 2. Main tactical red bounding box (BGR: (0, 0, 230))
         cv2.rectangle(out, (px1, py1), (px2, py2), (20, 20, 240), 2, cv2.LINE_AA)
 
-        # 3. Corner accent ticks to give a military HUD / tactical look
+        # 3. Corner accent ticks to give a military HUD / tactical look: (corner x, corner y, inward x, inward y),
+        #    top-left, top-right, bottom-left, bottom-right
         tick_len = max(6, min(18, int(min(px2 - px1, py2 - py1) * 0.25)))
-        if tick_len > 0:
-            # Top-left
-            cv2.line(out, (px1, py1), (px1 + tick_len, py1), (0, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(out, (px1, py1), (px1, py1 + tick_len), (0, 255, 255), 2, cv2.LINE_AA)
-            # Top-right
-            cv2.line(out, (px2, py1), (px2 - tick_len, py1), (0, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(out, (px2, py1), (px2, py1 + tick_len), (0, 255, 255), 2, cv2.LINE_AA)
-            # Bottom-left
-            cv2.line(out, (px1, py2), (px1 + tick_len, py2), (0, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(out, (px1, py2), (px1, py2 - tick_len), (0, 255, 255), 2, cv2.LINE_AA)
-            # Bottom-right
-            cv2.line(out, (px2, py2), (px2 - tick_len, py2), (0, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(out, (px2, py2), (px2, py2 - tick_len), (0, 255, 255), 2, cv2.LINE_AA)
+        for x, y, dx, dy in ((px1, py1, 1, 1), (px2, py1, -1, 1), (px1, py2, 1, -1), (px2, py2, -1, -1)):
+            cv2.line(out, (x, y), (x + dx * tick_len, y), (0, 255, 255), 2, cv2.LINE_AA)
+            cv2.line(out, (x, y), (x, y + dy * tick_len), (0, 255, 255), 2, cv2.LINE_AA)
 
         # 4. Numbered label badge
         label_text = f"#{i}"
@@ -118,10 +110,7 @@ def annotate(img: np.ndarray, result: AnalysisResult, draw_grid: bool = False) -
         if name:
             label_text += f" - {name}"
 
-        font = cv2.FONT_HERSHEY_DUPLEX
-        font_scale = 0.55
-        font_thickness = 1
-        (txt_w, txt_h), baseline = cv2.getTextSize(label_text, font, font_scale, font_thickness)
+        (txt_w, txt_h), _ = cv2.getTextSize(label_text, BADGE_FONT, BADGE_SCALE, BADGE_THICKNESS)
 
         # Badge positioning above box or inside box if too close to top; shifted left so the label stays in frame
         badge_y2 = py1 - 4 if py1 - (txt_h + 8) > 0 else py1 + txt_h + 10
@@ -135,6 +124,6 @@ def annotate(img: np.ndarray, result: AnalysisResult, draw_grid: bool = False) -
 
         # Text inside badge: white
         text_origin = (badge_x1 + 5, badge_y2 - 4)
-        cv2.putText(out, label_text, text_origin, font, font_scale, (255, 255, 255), font_thickness, cv2.LINE_AA)
+        cv2.putText(out, label_text, text_origin, BADGE_FONT, BADGE_SCALE, (255, 255, 255), BADGE_THICKNESS, cv2.LINE_AA)
 
     return out

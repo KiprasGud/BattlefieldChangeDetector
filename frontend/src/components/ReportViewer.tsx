@@ -1,12 +1,9 @@
 import type { BatchDetail, Finding, FramePair, ReportFormat } from "../api";
 import { CATEGORY_LABELS, CATEGORY_ORDER } from "../types";
+import { frameTime, pad2, pct } from "../util";
 
 // The verified change report, read in place: same rule as the exported one (backend render/report.py) - accepted
 // findings only, pairs without one left out - grouped by leg (Day1 -> Day2) with the boxes drawn over both frames.
-
-const pad2 = (n: number) => String(n).padStart(2, "0");
-const clock = (t: number) => `${pad2(Math.floor(t / 60))}:${pad2(Math.floor(t % 60))}`;
-const pct = (v: number) => `${Math.round(v * 100)}%`;
 
 interface Props {
   batch: BatchDetail;
@@ -53,7 +50,6 @@ export default function ReportViewer({ batch, onClose, onExport }: Props) {
   }));
   const total = totals.reduce((sum, t) => sum + t.n, 0);
   const legs = batch.legs.filter((leg) => verified.some((p) => p.leg_idx === leg.idx));
-  const time = (kind: string | null, t: number) => (kind === "image" ? "STILL" : clock(t));
 
   return (
     <div className="report-viewer">
@@ -121,8 +117,8 @@ export default function ReportViewer({ batch, onClose, onExport }: Props) {
               .map((p) => (
                 <div key={p.id} className="report-pair">
                   <div className="fs-xs mono">
-                    <span className="text-warn">PAIR {pad2(p.idx)}</span> · A@{time(p.kind_a, p.time_a)} ↔ B@
-                    {time(p.kind_b, p.time_b)}
+                    <span className="text-warn">PAIR {pad2(p.idx)}</span> · A@{frameTime(p.kind_a, p.time_a)} ↔ B@
+                    {frameTime(p.kind_b, p.time_b)}
                     <span className="text-dim">
                       {" "}
                       · INL {p.inliers} · OVL {pct(p.overlap)} · SSIM {p.ssim.toFixed(2)} · SRC {p.source.toUpperCase()}

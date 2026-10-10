@@ -2,6 +2,9 @@ import os
 from functools import partial
 from typing import Optional
 
+import numpy as np
+
+from ..contracts import AnalysisResult
 from . import cache, tiling
 from .gemini_client import analyze_with_gemini, make_client, model_name, thinking_level, verify_changes, verify_enabled
 from .mock import analyze_mock
@@ -13,13 +16,13 @@ def use_mock() -> bool:
 
 
 def analyze(
-    img_a,
-    aligned_b,
+    img_a: np.ndarray,
+    aligned_b: np.ndarray,
     criteria: str,
     lang: str = "en",
     hints: Optional[list[list[int]]] = None,
     aligned: bool = True,
-):
+) -> AnalysisResult:
     """PERSON 2 owns this package. Returns AnalysisResult.
 
     hints: optional candidate boxes (0-1000) from the change heatmap; Gemini verifies them.

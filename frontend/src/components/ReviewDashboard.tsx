@@ -10,6 +10,7 @@ import {
   rerunBatch,
   reportUrl,
   reviewFinding,
+  toAlignMethod,
   updateSettings,
   type Batch,
   type BatchDetail,
@@ -21,20 +22,17 @@ import {
   type ReportFormat,
   type ReviewStatus,
 } from "../api";
-import { CATEGORY_LABELS, CATEGORY_ORDER, type AlignMethod, type AnalyzeResponse } from "../types";
+import { CATEGORY_LABELS, CATEGORY_ORDER, type AnalyzeResponse } from "../types";
+import { download, errorText, frameTime, isTyping, pad2, pct, targetId } from "../util";
 import ReportViewer from "./ReportViewer";
 import ResultViewer from "./ResultViewer";
 
 const POLL_MS = 3000;
 
-const pad2 = (n: number) => String(n).padStart(2, "0");
-const clock = (t: number) => `${pad2(Math.floor(t / 60))}:${pad2(Math.floor(t % 60))}`;
-const pct = (v: number | null | undefined) => `${Math.round((v ?? 0) * 100)}%`;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 // A matched frame pair in the shape ResultViewer already renders (slider / HUD / split / heatmap).
 function pairResponse(batch: BatchDetail, pair: FramePair): AnalyzeResponse {
-  const method = pair.align_method;
   return {
     job_id: pair.id,
     result: {
@@ -53,7 +51,7 @@ function pairResponse(batch: BatchDetail, pair: FramePair): AnalyzeResponse {
     },
     align_quality: pair.align_quality,
     align_ok: true,
-    align_method: method === "sift" || method === "ecc" ? (method as AlignMethod) : "none",
+    align_method: toAlignMethod(pair.align_method),
     images: pair.images,
   };
 }
@@ -97,6 +95,9 @@ export default function ReviewDashboard({ onExit }: Props) {
   const settingsGen = useRef(0);
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 
+  // A failed action reports on the status line.
+  const fail = (e: unknown) => setStatusLine(`[ERR] ${errorText(e)}`);
+
   const refresh = useCallback(async () => {
     const gen = settingsGen.current;
     try {
@@ -105,9 +106,9 @@ export default function ReviewDashboard({ onExit }: Props) {
       setInbox(i);
       setBatches(list);
       setBackendUp(true);
-    } catch (e: any) {
+    } catch (e) {
       setBackendUp(false);
-      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+      setStatusLine(`[ERR] ${errorText(e)}`);
     }
   }, []);
 
@@ -124,7 +125,7 @@ export default function ReviewDashboard({ onExit }: Props) {
   useEffect(() => {
     fetchPresets()
       .then(setPresets)
-      .catch((e) => setStatusLine(`[ERR] TARGET CLASSES UNAVAILABLE: ${e?.message || String(e)}`));
+      .catch((e) => setStatusLine(`[ERR] TARGET CLASSES UNAVAILABLE: ${errorText(e)}`));
   }, []);
 
   const savedQuery = settings?.batch_query ?? "";
@@ -172,7 +173,7 @@ export default function ReviewDashboard({ onExit }: Props) {
     let alive = true;
     fetchBatch(selectedId)
       .then((d) => alive && setDetail(d))
-      .catch((e) => alive && setStatusLine(`[ERR] ${e?.message || String(e)}`));
+      .catch((e) => alive && setStatusLine(`[ERR] ${errorText(e)}`));
     return () => {
       alive = false;
     };
@@ -214,12 +215,12 @@ export default function ReviewDashboard({ onExit }: Props) {
           ),
         }
       );
-      setStatusLine(`[REVIEW] TRGT-${pad2(index + 1)} ${status.toUpperCase()}`);
+      setStatusLine(`[REVIEW] ${targetId(index)} ${status.toUpperCase()}`);
       const pos = order.indexOf(index);
       if (status !== "pending" && pos >= 0 && pos < order.length - 1) setFindingIdx(order[pos + 1]);
       refresh();
-    } catch (e: any) {
-      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    } catch (e) {
+      fail(e);
     }
   };
 
@@ -229,8 +230,8 @@ export default function ReviewDashboard({ onExit }: Props) {
       const s = await putSettings({ ai_enabled: !settings.ai_enabled });
       setSettings(s);
       setStatusLine(`[SYS] AI STEP ${s.ai_enabled ? "ON" : "OFF"} FOR NEW BATCHES.`);
-    } catch (e: any) {
-      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    } catch (e) {
+      fail(e);
     }
   };
 
@@ -245,8 +246,8 @@ export default function ReviewDashboard({ onExit }: Props) {
           : "[SYS] AUTO-BATCHING STOPPED: NEW FILES STAY IN THE INBOX, WORKER PAUSED."
       );
       await refresh();
-    } catch (e: any) {
-      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    } catch (e) {
+      fail(e);
     }
   };
 
@@ -255,8 +256,8 @@ export default function ReviewDashboard({ onExit }: Props) {
       const s = await putSettings(patch);
       setSettings(s);
       setStatusLine(`[SYS] NEW BATCHES TARGET: ${s.batch_criteria.toUpperCase()}`);
-    } catch (e: any) {
-      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    } catch (e) {
+      fail(e);
       if (!saving.current) refresh(); // show what the server kept
     }
   };
@@ -286,8 +287,8 @@ export default function ReviewDashboard({ onExit }: Props) {
       setStatusLine(`[SYS] QUEUE CLEARED: ${r.deleted.length} BATCH(ES) DROPPED, ${r.files.length} FILE(S) BACK IN INBOX.`);
       if (selectedId && r.deleted.includes(selectedId)) setSelectedId(null);
       await refresh();
-    } catch (e: any) {
-      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    } catch (e) {
+      fail(e);
     }
   };
 
@@ -303,13 +304,13 @@ export default function ReviewDashboard({ onExit }: Props) {
       );
       if (r.batch_id) setSelectedId(r.batch_id);
       await refresh();
-    } catch (e: any) {
+    } catch (e) {
       setPendingPairs((prev) => {
         const next = new Set(prev);
         next.delete(key);
         return next;
       });
-      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+      fail(e);
     }
   };
 
@@ -320,19 +321,14 @@ export default function ReviewDashboard({ onExit }: Props) {
       setStatusLine(`[EXEC] RE-QUEUED AS ${id} (AI ${settings?.ai_enabled ? "ON" : "OFF"}).`);
       await refresh();
       setSelectedId(id);
-    } catch (e: any) {
-      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    } catch (e) {
+      fail(e);
     }
   };
 
   const exportReport = (format: ReportFormat) => {
     if (!selectedId) return;
-    const a = document.createElement("a");
-    a.href = reportUrl(selectedId, format);
-    a.download = `zvalgas_report_${selectedId}.${format}`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    download(reportUrl(selectedId, format), `zvalgas_report_${selectedId}.${format}`);
     setStatusLine(`[SYS] REPORT EXPORTED (${format.toUpperCase()}): ACCEPTED FINDINGS ONLY.`);
   };
 
@@ -351,7 +347,7 @@ export default function ReviewDashboard({ onExit }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.getAttribute("role") === "slider")) return;
+      if (isTyping(target) || target?.getAttribute("role") === "slider") return;
       if (e.altKey) {
         const key = e.key.toLowerCase();
         if (key === "i") toggleAi();
@@ -393,9 +389,8 @@ export default function ReviewDashboard({ onExit }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const isStill = (kind: string | null) => kind === "image";
-  const timeA = pair ? (isStill(pair.kind_a) ? "STILL" : clock(pair.time_a)) : "";
-  const timeB = pair ? (isStill(pair.kind_b) ? "STILL" : clock(pair.time_b)) : "";
+  const timeA = pair ? frameTime(pair.kind_a, pair.time_a) : "";
+  const timeB = pair ? frameTime(pair.kind_b, pair.time_b) : "";
   const unbatched = inbox?.groups?.filter((g) => !g.batched) ?? [];
 
   let center: JSX.Element;
@@ -722,7 +717,7 @@ export default function ReviewDashboard({ onExit }: Props) {
                       >
                         <div className="finding-head mono">
                           <span>
-                            TRGT-{pad2(i + 1)} {f.type.toUpperCase()}
+                            {targetId(i)} {f.type.toUpperCase()}
                           </span>
                           <span className={`status-${f.review_status}`}>[{f.review_status.toUpperCase()}]</span>
                         </div>

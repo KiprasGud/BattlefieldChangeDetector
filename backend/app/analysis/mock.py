@@ -95,7 +95,7 @@ def _pick(value, lang: str) -> str:
     return value.get(lang) or value.get("en", "") if isinstance(value, dict) else str(value)
 
 
-def analyze_mock(img_a, aligned_b, criteria: str, lang: str = "en") -> AnalysisResult:
+def analyze_mock(img_a: np.ndarray, aligned_b: np.ndarray, criteria: str, lang: str = "en") -> AnalysisResult:
     match = match_pair(img_a)
     if match is None:
         return to_result(json.loads(FIXTURE.read_text(encoding="utf-8")), image_b=aligned_b)

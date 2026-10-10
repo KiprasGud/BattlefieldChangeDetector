@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile  # noqa: E402
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
@@ -22,6 +22,7 @@ from .analysis import use_mock  # noqa: E402
 from .analysis.presets import build_criteria, catalog, parse_ids  # noqa: E402
 from .contracts import AnalyzeResponse  # noqa: E402
 from .ingest import SCHEME, watcher  # noqa: E402
+from .ingest.naming import MediaName  # noqa: E402
 from .render import report  # noqa: E402
 from .storage import (  # noqa: E402
     complete_job,
@@ -35,6 +36,8 @@ from .storage import (  # noqa: E402
 )
 from .storage import batches as batch_store  # noqa: E402
 from .video import frame_fps  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 pipeline.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 SAMPLE_DATA_DIR = Path(__file__).resolve().parents[2] / "shared" / "sample_data"
@@ -53,7 +56,7 @@ async def lifespan(_app: FastAPI):
         try:
             watcher.start_service()
         except RuntimeError as e:
-            logging.getLogger(__name__).warning("Watch folder disabled: %s", e)
+            log.warning("Watch folder disabled: %s", e)
     yield
     watcher.stop_service()
 
@@ -99,42 +102,39 @@ def list_presets():
 @app.get("/api/samples")
 def list_samples():
     """Returns available sample pairs for demo/testing."""
+    if not SAMPLE_DATA_DIR.exists():
+        return []
     samples = []
-    if SAMPLE_DATA_DIR.exists():
-        for pair_dir in sorted(SAMPLE_DATA_DIR.iterdir()):
-            if pair_dir.is_dir():
-                pair_id = pair_dir.name
-                meta = SAMPLE_METADATA.get(
-                    pair_id,
-                    {
-                        "name": f"Demo Pair {pair_id}",
-                        "description": "Demonstration reconnaissance pair",
-                        "criteria": "New vehicle tracks, craters / digging",
-                    },
-                )
-                file_a = pair_dir / "a.jpg"
-                file_b = pair_dir / "b.jpg"
-                if file_a.exists() and file_b.exists():
-                    samples.append(
-                        {
-                            "id": pair_id,
-                            "name": meta["name"],
-                            "description": meta["description"],
-                            "criteria": meta["criteria"],
-                            "image_a_url": f"/api/samples/{pair_id}/a.jpg",
-                            "image_b_url": f"/api/samples/{pair_id}/b.jpg",
-                        }
-                    )
+    for pair_dir in sorted(SAMPLE_DATA_DIR.iterdir()):
+        if not pair_dir.is_dir() or not (pair_dir / "a.jpg").exists() or not (pair_dir / "b.jpg").exists():
+            continue
+        pair_id = pair_dir.name
+        meta = SAMPLE_METADATA.get(
+            pair_id,
+            {
+                "name": f"Demo Pair {pair_id}",
+                "description": "Demonstration reconnaissance pair",
+                "criteria": "New vehicle tracks, craters / digging",
+            },
+        )
+        samples.append(
+            {
+                "id": pair_id,
+                "name": meta["name"],
+                "description": meta["description"],
+                "criteria": meta["criteria"],
+                "image_a_url": f"/api/samples/{pair_id}/a.jpg",
+                "image_b_url": f"/api/samples/{pair_id}/b.jpg",
+            }
+        )
     return samples
 
 
 @app.get("/api/samples/{pair_id}/{filename}")
 def get_sample_file(pair_id: str, filename: str):
     """Serves sample image files safely."""
-    safe_pair_id = Path(pair_id).name
-    safe_filename = Path(filename).name
-    file_path = SAMPLE_DATA_DIR / safe_pair_id / safe_filename
-    if not file_path.resolve().is_file() or not str(file_path.resolve()).startswith(str(SAMPLE_DATA_DIR.resolve())):
+    file_path = (SAMPLE_DATA_DIR / Path(pair_id).name / Path(filename).name).resolve()
+    if not file_path.is_file() or not file_path.is_relative_to(SAMPLE_DATA_DIR.resolve()):
         raise HTTPException(status_code=404, detail="Sample file not found")
     return FileResponse(path=file_path, media_type="image/jpeg")
 
@@ -173,6 +173,7 @@ def _run_job_worker(
             warnings=response.warnings,
         )
     except Exception as e:
+        log.exception("Job %s failed", job_id)
         fail_job(job_id, str(e))
     finally:
         prune_old_jobs(max_count=50, max_age_hours=24)
@@ -330,27 +331,25 @@ def clear_queue():
     return batch.clear_queue()
 
 
-def _inbox_groups(svc) -> list[dict[str, Any]]:
+def _inbox_groups(groups: list[list[MediaName]], legs: dict[str, set[tuple[str, str]]]) -> list[dict[str, Any]]:
     """Projects in the inbox; batched when every consecutive pair of their files is a leg of a batch not failed."""
-    legs = batch_store.project_legs()
-    groups = []
-    for group in svc.inbox.groups():
+    out = []
+    for group in groups:
         project = group[0].site
         pairs = {(a.path.name, b.path.name) for a, b in zip(group, group[1:])}
-        groups.append({
+        out.append({
             "project": project, "site": group[0].key, "files": [m.path.name for m in group],
             "epochs": [m.tag for m in group], "batched": pairs <= legs.get(project, set()),
         })
-    return groups
+    return out
 
 
-def _inbox_pairs(svc) -> list[dict[str, Any]]:
+def _inbox_pairs(groups: list[list[MediaName]], legs: dict[str, set[tuple[str, str]]]) -> list[dict[str, Any]]:
     """Every consecutive epoch pair in the inbox, batched or not: the pairs view keeps them all."""
-    legs = batch_store.project_legs()
     return [
         {"project": a.site, "site": a.key, "name_a": a.path.name, "name_b": b.path.name, "tag_a": a.tag,
          "tag_b": b.tag, "batched": (a.path.name, b.path.name) in legs.get(a.site, set())}
-        for group in svc.inbox.groups() for a, b in zip(group, group[1:])
+        for group in groups for a, b in zip(group, group[1:])
     ]
 
 
@@ -359,11 +358,12 @@ def get_inbox():
     """Files in the watch folder waiting for a partner, projects (batched or not), their consecutive pairs, and names
     that do not follow the scheme."""
     svc = watcher.service()
-    snapshot = svc.inbox.snapshot() if svc else {"waiting": [], "paired": [], "rejected": []}
-    groups = _inbox_groups(svc) if svc else []
-    pairs = _inbox_pairs(svc) if svc else []
-    return {"watching": svc is not None, "folder": _settings()["watch_dir"], "scheme": SCHEME, "groups": groups,
-            "pairs": pairs, **snapshot}
+    if svc is None:
+        return {"watching": False, "folder": str(watcher.watch_dir()), "scheme": SCHEME, "groups": [], "pairs": [],
+                "waiting": [], "paired": [], "rejected": []}
+    groups, legs = svc.inbox.groups(), batch_store.project_legs()  # read once, shared by both views
+    return {"watching": True, "folder": str(svc.folder), "scheme": SCHEME, "groups": _inbox_groups(groups, legs),
+            "pairs": _inbox_pairs(groups, legs), **svc.inbox.snapshot()}
 
 
 class PairBatch(BaseModel):

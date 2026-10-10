@@ -2,13 +2,13 @@
 Day1 -> Day2, Day2 -> Day5), their matched frame pairs, and the findings with the reviewer's verdict. Same SQLite file
 as the job history, but never pruned automatically: reviews must survive."""
 import json
+import sqlite3
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from ..contracts import Change
-from .db import get_connection
+from .db import connect
 
 REVIEW_STATUSES = ("pending", "accepted", "rejected")
 
@@ -36,18 +36,8 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-@contextmanager
-def _db():
-    conn = get_connection()
-    try:
-        with conn:  # commits, or rolls back on error
-            yield conn
-    finally:
-        conn.close()
-
-
 def init_batch_db() -> None:
-    with _db() as conn:
+    with connect() as conn:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS batches (
@@ -124,7 +114,7 @@ def init_batch_db() -> None:
         _migrate(conn)
 
 
-def _migrate(conn) -> None:
+def _migrate(conn: sqlite3.Connection) -> None:
     """Databases from before project batches: add the new columns and give every old batch its one leg."""
     for table, column, kind in (("batches", "project", "TEXT"), ("batches", "criteria", "TEXT"),
                                 ("frame_pairs", "leg_idx", "INTEGER")):
@@ -155,7 +145,7 @@ def create_batch(batch_id: str, **fields: Any) -> None:
     values.update(status="queued", stage="queued", progress="", timings_json="{}", warnings_json="[]")
     values["ai_enabled"] = 1 if values.get("ai_enabled") else 0
     cols = ["id", "created_at", "updated_at", *values]
-    with _db() as conn:
+    with connect() as conn:
         conn.execute(
             f"INSERT INTO batches ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
             (batch_id, now, now, *values.values()),
@@ -170,7 +160,7 @@ def update_batch(batch_id: str, **fields: Any) -> None:
         elif key in _BATCH_COLUMNS:
             sets[key] = value
     sets["updated_at"] = _now()
-    with _db() as conn:
+    with connect() as conn:
         conn.execute(
             f"UPDATE batches SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?",
             (*sets.values(), batch_id),
@@ -189,7 +179,7 @@ def fail_batch(batch_id: str, message: str, warnings: Optional[list[str]] = None
 
 def find_project_batch(project: str) -> Optional[dict[str, Any]]:
     """The project's latest batch: new epochs of the project are added to it as legs."""
-    with _db() as conn:
+    with connect() as conn:
         row = conn.execute(
             f"SELECT b.*, {_COUNTS} FROM batches b WHERE b.project = ? ORDER BY b.created_at DESC, b.rowid DESC LIMIT 1",
             (project,),
@@ -199,7 +189,7 @@ def find_project_batch(project: str) -> Optional[dict[str, Any]]:
 
 def project_legs() -> dict[str, set[tuple[str, str]]]:
     """(name_a, name_b) of every leg that has not failed, by project: which inbox pairs are already batched."""
-    with _db() as conn:
+    with connect() as conn:
         rows = conn.execute(
             "SELECT b.project, l.name_a, l.name_b FROM batch_legs l JOIN batches b ON b.id = l.batch_id "
             "WHERE l.status != 'error'"
@@ -212,7 +202,7 @@ def project_legs() -> dict[str, set[tuple[str, str]]]:
 
 def reset_interrupted() -> list[str]:
     """Batches left queued or running by a stopped process go back to the queue; returns their ids."""
-    with _db() as conn:
+    with connect() as conn:
         ids = [r["id"] for r in conn.execute(
             "SELECT id FROM batches WHERE status IN ('queued', 'running') ORDER BY created_at"
         ).fetchall()]
@@ -223,7 +213,7 @@ def reset_interrupted() -> list[str]:
 
 
 def queued_count() -> int:
-    with _db() as conn:
+    with connect() as conn:
         return conn.execute("SELECT COUNT(*) FROM batches WHERE status = 'queued'").fetchone()[0]
 
 
@@ -234,7 +224,7 @@ def clear_queued() -> dict[str, list]:
     deleted: list[str] = []
     dropped: list[tuple[str, int]] = []
     files: set[str] = set()
-    with _db() as conn:
+    with connect() as conn:
         for b in conn.execute("SELECT id FROM batches WHERE status = 'queued'").fetchall():
             legs = conn.execute("SELECT * FROM batch_legs WHERE batch_id = ?", (b["id"],)).fetchall()
             done = [leg for leg in legs if leg["status"] == "done"]
@@ -242,11 +232,7 @@ def clear_queued() -> dict[str, list]:
                 if leg["status"] == "done":
                     continue
                 files.update((leg["name_a"], leg["name_b"]))
-                for p in conn.execute("SELECT id, idx FROM frame_pairs WHERE batch_id = ? AND leg_idx = ?",
-                                      (b["id"], leg["idx"])).fetchall():
-                    dropped.append((b["id"], p["idx"]))
-                    conn.execute("DELETE FROM findings WHERE pair_id = ?", (p["id"],))
-                conn.execute("DELETE FROM frame_pairs WHERE batch_id = ? AND leg_idx = ?", (b["id"], leg["idx"]))
+                dropped += [(b["id"], idx) for idx in _drop_leg_pairs(conn, b["id"], leg["idx"])]
                 conn.execute("DELETE FROM batch_legs WHERE id = ?", (leg["id"],))
             if done:
                 last = max(done, key=lambda leg: leg["idx"])
@@ -267,7 +253,7 @@ def add_leg(batch_id: str, **fields: Any) -> str:
     leg_id = uuid.uuid4().hex[:12]
     values = {k: v for k, v in fields.items() if k in _LEG_COLUMNS}
     values.setdefault("status", "pending")
-    with _db() as conn:
+    with connect() as conn:
         idx = conn.execute(
             "SELECT COALESCE(MAX(idx), 0) + 1 FROM batch_legs WHERE batch_id = ?", (batch_id,)
         ).fetchone()[0]
@@ -287,19 +273,19 @@ def update_leg(leg_id: str, **fields: Any) -> None:
         elif key in _LEG_COLUMNS:
             sets[key] = value
     if sets:
-        with _db() as conn:
+        with connect() as conn:
             conn.execute(f"UPDATE batch_legs SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?",
                          (*sets.values(), leg_id))
 
 
 def list_legs(batch_id: str) -> list[dict[str, Any]]:
-    with _db() as conn:
+    with connect() as conn:
         rows = conn.execute("SELECT * FROM batch_legs WHERE batch_id = ? ORDER BY idx", (batch_id,)).fetchall()
     return [_leg(r) for r in rows]
 
 
 def next_pending_leg(batch_id: str) -> Optional[dict[str, Any]]:
-    with _db() as conn:
+    with connect() as conn:
         row = conn.execute(
             "SELECT * FROM batch_legs WHERE batch_id = ? AND status = 'pending' ORDER BY idx LIMIT 1", (batch_id,)
         ).fetchone()
@@ -307,28 +293,37 @@ def next_pending_leg(batch_id: str) -> Optional[dict[str, Any]]:
 
 
 def next_pair_idx(batch_id: str) -> int:
-    with _db() as conn:
+    with connect() as conn:
         return conn.execute(
             "SELECT COALESCE(MAX(idx), 0) + 1 FROM frame_pairs WHERE batch_id = ?", (batch_id,)
         ).fetchone()[0]
 
 
+def count_pairs(batch_id: str) -> int:
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM frame_pairs WHERE batch_id = ?", (batch_id,)).fetchone()[0]
+
+
+def _drop_leg_pairs(conn: sqlite3.Connection, batch_id: str, leg_idx: int) -> list[int]:
+    """Delete a leg's frame pairs and their findings; returns the dropped pair idxs."""
+    pairs = conn.execute(
+        "SELECT id, idx FROM frame_pairs WHERE batch_id = ? AND leg_idx = ?", (batch_id, leg_idx)
+    ).fetchall()
+    conn.executemany("DELETE FROM findings WHERE pair_id = ?", [(p["id"],) for p in pairs])
+    conn.execute("DELETE FROM frame_pairs WHERE batch_id = ? AND leg_idx = ?", (batch_id, leg_idx))
+    return [p["idx"] for p in pairs]
+
+
 def clear_leg_pairs(batch_id: str, leg_idx: int) -> list[int]:
     """Drop a leg's frame pairs and findings (a retried leg starts clean); returns the dropped pair idxs."""
-    with _db() as conn:
-        pairs = conn.execute(
-            "SELECT id, idx FROM frame_pairs WHERE batch_id = ? AND leg_idx = ?", (batch_id, leg_idx)
-        ).fetchall()
-        for p in pairs:
-            conn.execute("DELETE FROM findings WHERE pair_id = ?", (p["id"],))
-        conn.execute("DELETE FROM frame_pairs WHERE batch_id = ? AND leg_idx = ?", (batch_id, leg_idx))
-    return [p["idx"] for p in pairs]
+    with connect() as conn:
+        return _drop_leg_pairs(conn, batch_id, leg_idx)
 
 
 def add_pair(batch_id: str, pair: dict[str, Any], changes: Iterable[Change]) -> str:
     """Store one compared frame pair and its findings (all pending review); returns the pair id."""
     pair_id = uuid.uuid4().hex[:12]
-    with _db() as conn:
+    with connect() as conn:
         conn.execute(
             """
             INSERT INTO frame_pairs (id, batch_id, leg_idx, idx, frame_a, frame_b, time_a, time_b, inliers, overlap,
@@ -361,7 +356,7 @@ def add_pair(batch_id: str, pair: dict[str, Any], changes: Iterable[Change]) -> 
 def set_review(finding_id: str, status: str) -> Optional[dict[str, Any]]:
     if status not in REVIEW_STATUSES:
         raise ValueError(f"status must be one of {REVIEW_STATUSES}")
-    with _db() as conn:
+    with connect() as conn:
         cur = conn.execute(
             "UPDATE findings SET review_status = ?, reviewed_at = ? WHERE id = ?",
             (status, _now() if status != "pending" else None, finding_id),
@@ -373,13 +368,13 @@ def set_review(finding_id: str, status: str) -> Optional[dict[str, Any]]:
 
 
 def get_batch(batch_id: str) -> Optional[dict[str, Any]]:
-    with _db() as conn:
+    with connect() as conn:
         row = conn.execute(f"SELECT b.*, {_COUNTS} FROM batches b WHERE b.id = ?", (batch_id,)).fetchone()
     return _batch(row) if row else None
 
 
 def list_batches(limit: int = 50) -> list[dict[str, Any]]:
-    with _db() as conn:
+    with connect() as conn:
         rows = conn.execute(
             f"SELECT b.*, {_COUNTS} FROM batches b ORDER BY b.created_at DESC, b.rowid DESC LIMIT ?", (limit,)
         ).fetchall()
@@ -391,7 +386,7 @@ def batch_detail(batch_id: str) -> Optional[dict[str, Any]]:
     batch = get_batch(batch_id)
     if batch is None:
         return None
-    with _db() as conn:
+    with connect() as conn:
         pairs = [dict(r) for r in conn.execute(
             "SELECT * FROM frame_pairs WHERE batch_id = ? ORDER BY idx", (batch_id,)
         ).fetchall()]
@@ -413,7 +408,7 @@ def batch_detail(batch_id: str) -> Optional[dict[str, Any]]:
     return batch
 
 
-def _batch(row) -> dict[str, Any]:
+def _batch(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["ai_enabled"] = bool(d.get("ai_enabled"))
     d["timings"] = json.loads(d.pop("timings_json") or "{}")
@@ -421,14 +416,14 @@ def _batch(row) -> dict[str, Any]:
     return d
 
 
-def _leg(row) -> dict[str, Any]:
+def _leg(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["timings"] = json.loads(d.pop("timings_json") or "{}")
     d["warnings"] = json.loads(d.pop("warnings_json") or "[]")
     return d
 
 
-def _finding(row) -> dict[str, Any]:
+def _finding(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["box"] = json.loads(d.pop("box_json") or "[0, 0, 0, 0]")
     return d

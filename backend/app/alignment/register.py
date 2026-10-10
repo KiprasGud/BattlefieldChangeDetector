@@ -11,7 +11,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from ..contracts import AlignResult
+from ..contracts import AlignMethod, AlignResult
 
 # Decode flags for every image read: pixels only, the EXIF orientation tag is ignored.
 IMREAD_PIXELS = cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
@@ -323,13 +323,11 @@ def warp_into(a_shape, img_b: np.ndarray, homography) -> tuple[np.ndarray, np.nd
 
 def align(img_a: np.ndarray, img_b: np.ndarray, debug: bool = False) -> AlignResult:
     """Warp img_b into img_a's frame: mirror-aware SIFT + MAGSAC (sub-pixel), ECC fallback for feature-poor pairs."""
-    if img_a.size == 0 or img_b.size == 0 or img_a.shape[0] == 0 or img_b.shape[0] == 0:
-        return AlignResult(
-            aligned_b=img_b, homography=None, quality=0.0, ok=False,
-            **{"method": "none", "valid_mask": None}
-        )
+    if img_a.size == 0 or img_b.size == 0:
+        return AlignResult(aligned_b=img_b, homography=None, quality=0.0, ok=False, method="none", valid_mask=None)
 
     h_a, w_a = img_a.shape[:2]
+    method: AlignMethod
     reg = estimate_homography(img_b, img_a)
     if reg is not None:
         method, quality = "sift", reg.ncc
@@ -345,7 +343,8 @@ def align(img_a: np.ndarray, img_b: np.ndarray, debug: bool = False) -> AlignRes
             homography=None,
             quality=0.0,
             ok=False,
-            **{"method": "none", "valid_mask": None}
+            method="none",
+            valid_mask=None,
         )
 
     aligned_b, valid_mask = warp_into(img_a.shape, img_b, homography)
@@ -358,5 +357,6 @@ def align(img_a: np.ndarray, img_b: np.ndarray, debug: bool = False) -> AlignRes
         homography=homography.tolist(),
         quality=float(np.clip(quality, 0.0, 1.0)),
         ok=True,
-        **{"method": method, "valid_mask": valid_mask}
+        method=method,
+        valid_mask=valid_mask,
     )

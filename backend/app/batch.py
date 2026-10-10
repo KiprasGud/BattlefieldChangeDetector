@@ -197,12 +197,11 @@ def _finish(batch_id: str, ai_warning: Optional[str]) -> None:
     """Roll the legs up into the batch: done when at least one leg is, error when every leg failed."""
     legs = store.list_legs(batch_id)
     warnings = [ai_warning] if ai_warning else []
+    timings: dict[str, float] = {}
     for leg in legs:
         warnings += [f"{_leg_label(leg)}: {w}" for w in leg["warnings"]]
         if leg["status"] == "error":
             warnings.append(f"{_leg_label(leg)} failed: {leg['error_message']}")
-    timings: dict[str, float] = {}
-    for leg in legs:
         for k, v in leg["timings"].items():
             timings[k] = round(timings.get(k, 0.0) + v, 3)
     done = [leg for leg in legs if leg["status"] == "done"]
@@ -210,9 +209,12 @@ def _finish(batch_id: str, ai_warning: Optional[str]) -> None:
         message = "; ".join(f"{_leg_label(leg)}: {leg['error_message']}" for leg in legs) or "No legs to compare."
         store.fail_batch(batch_id, message, warnings)
         return
-    total = lambda key: sum(leg[key] or 0 for leg in done)  # noqa: E731
+
+    def total(key: str) -> int:
+        return sum(leg[key] or 0 for leg in done)
+
     store.finish_batch(
-        batch_id, pairs_count=len(store.batch_detail(batch_id)["pairs"]), timings=timings, warnings=warnings,
+        batch_id, pairs_count=store.count_pairs(batch_id), timings=timings, warnings=warnings,
         kind_a=legs[0]["kind_a"], kind_b=legs[-1]["kind_b"], frames_a=total("frames_a"), frames_b=total("frames_b"),
         matched_pairs=total("matched_pairs"),
     )

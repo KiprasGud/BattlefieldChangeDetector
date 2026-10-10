@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from "react";
 import type { ReviewStatus } from "../api";
 import { CATEGORY_CODES, type AnalyzeResponse, type Change } from "../types";
+import { isTyping, targetId } from "../util";
 
 type Size = { w: number; h: number };
 
@@ -30,6 +31,14 @@ interface Props {
 }
 
 type ViewMode = "slider" | "annotated" | "split" | "heatmap";
+
+// Every view with its [1]-[4] shortcut and button label.
+const VIEW_MODES: { mode: ViewMode; key: string; label: string }[] = [
+  { mode: "slider", key: "1", label: "SLIDER" },
+  { mode: "annotated", key: "2", label: "HUD" },
+  { mode: "split", key: "3", label: "SPLIT" },
+  { mode: "heatmap", key: "4", label: "HEATMAP" },
+];
 
 const DRAG_THRESHOLD = 4;
 
@@ -68,7 +77,7 @@ function TacticalBoxOverlay({
         const isSelected = selectedIndex === idx;
         const review = statuses?.[idx] ? `review-${statuses[idx]}` : "";
         const code = c.category ? ` ${CATEGORY_CODES[c.category] ?? "UNK"}` : "";
-        const id = `TRGT-${String(idx + 1).padStart(2, '0')}`;
+        const id = targetId(idx);
         return (
           <div
             key={idx}
@@ -148,9 +157,8 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
   // [1]-[4] switch the view; ignored while typing or with a modifier held.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
-      const el = e.target as HTMLElement | null;
-      if (e.altKey || e.ctrlKey || e.metaKey || (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA"))) return;
-      const next = ({ "1": "slider", "2": "annotated", "3": "split", "4": "heatmap" } as const)[e.key as "1" | "2" | "3" | "4"];
+      if (e.altKey || e.ctrlKey || e.metaKey || isTyping(e.target)) return;
+      const next = VIEW_MODES.find((v) => v.key === e.key)?.mode;
       if (!next || (next === "heatmap" && !heatmapUrl)) return;
       e.preventDefault();
       setMode(next);
@@ -169,15 +177,19 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
     e.preventDefault();
   };
 
+  // The same box layer sits on top of whichever view is shown.
+  const overlay = (
+    <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} statuses={statuses} natural={natural} />
+  );
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div className="view-controls">
-        <button className={`tactical-toggle ${view === "slider" ? "active" : ""}`} onClick={() => setMode("slider")}>[1] SLIDER</button>
-        <button className={`tactical-toggle ${view === "annotated" ? "active" : ""}`} onClick={() => setMode("annotated")}>[2] HUD</button>
-        <button className={`tactical-toggle ${view === "split" ? "active" : ""}`} onClick={() => setMode("split")}>[3] SPLIT</button>
-        {heatmapUrl && (
-          <button className={`tactical-toggle ${view === "heatmap" ? "active" : ""}`} onClick={() => setMode("heatmap")}>[4] HEATMAP</button>
-        )}
+        {VIEW_MODES.filter((v) => v.mode !== "heatmap" || heatmapUrl).map((v) => (
+          <button key={v.mode} className={`tactical-toggle ${view === v.mode ? "active" : ""}`} onClick={() => setMode(v.mode)}>
+            [{v.key}] {v.label}
+          </button>
+        ))}
       </div>
 
       <div style={{ flexGrow: 1, position: "relative" }}>
@@ -192,12 +204,12 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
             style={{ cursor: "ew-resize", touchAction: "pan-y", height: "100%" }}
           >
             <SafeImg src={alignedUrl} alt="Aligned recon" className="diff-layer" />
-            
+
             <div className="diff-layer" style={{ clipPath: `inset(0 ${100 - sliderPos}% 0 0)` }}>
               <SafeImg src={beforeUrl} alt="Baseline" className="diff-layer" />
             </div>
 
-            <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} statuses={statuses} natural={natural} />
+            {overlay}
 
             <div
               className="slider-divider"
@@ -219,7 +231,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
         {view === "annotated" && (
           <div className="diff-container" style={{ height: "100%" }}>
             <SafeImg src={annotatedUrl} alt="Annotated output" className="diff-layer" />
-            <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} statuses={statuses} natural={natural} />
+            {overlay}
           </div>
         )}
 
@@ -231,7 +243,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
             </div>
             <div className="fit-host" style={{ position: "relative", background: "var(--bg-app)" }}>
               <SafeImg src={annotatedUrl} alt="Annotated" className="diff-layer" />
-              <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} statuses={statuses} natural={natural} />
+              {overlay}
               <div className="diff-label" style={{ left: "12px", color: "var(--accent-exec)" }}>RECON</div>
             </div>
           </div>
@@ -241,8 +253,8 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
           <div className="diff-container" style={{ height: "100%" }}>
             <SafeImg src={alignedUrl} alt="Base" className="diff-layer" />
             <SafeImg src={heatmapUrl} alt="Heatmap" className="diff-layer" style={{ opacity: heatmapOpacity, mixBlendMode: "screen" }} />
-            <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} statuses={statuses} natural={natural} />
-            
+            {overlay}
+
             <div className="heatmap-opacity">
               <span className="fs-xs mono">HEATMAP OPACITY: {(heatmapOpacity * 100).toFixed(0)}%</span>
               <input

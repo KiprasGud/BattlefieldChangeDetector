@@ -2,14 +2,22 @@
 import json
 import shutil
 import sqlite3
-import time
-from datetime import datetime
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 DB_DIR = Path(__file__).resolve().parents[2] / "output"
 DB_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DB_DIR / "zvalgas.db"
+
+# Job columns stored as JSON: (key in the returned dict, column, value used while the column is empty).
+_JSON_FIELDS = (
+    ("result", "result_json", "null"),
+    ("timings", "timings_json", "{}"),
+    ("warnings", "warnings_json", "[]"),
+    ("images", "images_json", "{}"),
+)
 
 
 def get_connection() -> sqlite3.Connection:
@@ -18,8 +26,24 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+@contextmanager
+def connect() -> Iterator[sqlite3.Connection]:
+    """A connection that commits on success, rolls back on error, and is always closed."""
+    conn = get_connection()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
+def _utcnow() -> str:
+    """Naive UTC ISO timestamp, the format every stored job uses (datetime.utcnow() is deprecated)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+
+
 def init_db() -> None:
-    with get_connection() as conn:
+    with connect() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS jobs (
@@ -44,13 +68,12 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC)")
-        conn.commit()
 
 
 def create_job(job_id: str, criteria: str, lang: str = "en") -> dict[str, Any]:
     init_db()
-    now = datetime.utcnow().isoformat()
-    with get_connection() as conn:
+    now = _utcnow()
+    with connect() as conn:
         conn.execute(
             """
             INSERT INTO jobs (id, created_at, updated_at, status, stage, criteria, lang, timings_json, warnings_json)
@@ -58,7 +81,6 @@ def create_job(job_id: str, criteria: str, lang: str = "en") -> dict[str, Any]:
             """,
             (job_id, now, now, criteria, lang),
         )
-        conn.commit()
     return {
         "job_id": job_id,
         "status": "queued",
@@ -72,20 +94,13 @@ def create_job(job_id: str, criteria: str, lang: str = "en") -> dict[str, Any]:
 
 
 def update_job_stage(job_id: str, stage: str, timings: Optional[dict[str, float]] = None) -> None:
-    now = datetime.utcnow().isoformat()
-    timings_str = json.dumps(timings) if timings is not None else None
-    with get_connection() as conn:
-        if timings_str:
-            conn.execute(
-                "UPDATE jobs SET stage = ?, status = 'running', updated_at = ?, timings_json = ? WHERE id = ?",
-                (stage, now, timings_str, job_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE jobs SET stage = ?, status = 'running', updated_at = ? WHERE id = ?",
-                (stage, now, job_id),
-            )
-        conn.commit()
+    """timings=None keeps the stored timings."""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE jobs SET stage = ?, status = 'running', updated_at = ?, timings_json = COALESCE(?, timings_json) "
+            "WHERE id = ?",
+            (stage, _utcnow(), json.dumps(timings) if timings is not None else None, job_id),
+        )
 
 
 def complete_job(
@@ -98,10 +113,10 @@ def complete_job(
     timings: dict[str, float],
     warnings: list[str],
 ) -> None:
-    now = datetime.utcnow().isoformat()
+    now = _utcnow()
     summary = result.get("summary", "")
     changes = result.get("changes", [])
-    with get_connection() as conn:
+    with connect() as conn:
         conn.execute(
             """
             UPDATE jobs
@@ -133,87 +148,52 @@ def complete_job(
                 job_id,
             ),
         )
-        conn.commit()
 
 
 def fail_job(job_id: str, error_message: str) -> None:
-    now = datetime.utcnow().isoformat()
-    with get_connection() as conn:
+    with connect() as conn:
         conn.execute(
             "UPDATE jobs SET status = 'error', stage = 'error', updated_at = ?, error_message = ? WHERE id = ?",
-            (now, error_message, job_id),
+            (_utcnow(), error_message, job_id),
         )
-        conn.commit()
 
 
 def get_job(job_id: str) -> Optional[dict[str, Any]]:
     init_db()
-    with get_connection() as conn:
-        cur = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
-        row = cur.fetchone()
-        if not row:
-            return None
-        return _row_to_dict(row)
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    return _row_to_dict(row) if row else None
 
 
 def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
     init_db()
-    with get_connection() as conn:
-        cur = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,))
-        return [_row_to_dict(row) for row in cur.fetchall()]
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    return [_row_to_dict(row) for row in rows]
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["job_id"] = d.pop("id")
     d["align_ok"] = bool(d.get("align_ok"))
-    if d.get("result_json"):
-        d["result"] = json.loads(d["result_json"])
-    else:
-        d["result"] = None
-
-    if d.get("timings_json"):
-        d["timings"] = json.loads(d["timings_json"])
-    else:
-        d["timings"] = {}
-
-    if d.get("warnings_json"):
-        d["warnings"] = json.loads(d["warnings_json"])
-    else:
-        d["warnings"] = []
-
-    if d.get("images_json"):
-        d["images"] = json.loads(d["images_json"])
-    else:
-        d["images"] = {}
+    for key, column, empty in _JSON_FIELDS:
+        d[key] = json.loads(d.get(column) or empty)
     return d
 
 
 def prune_old_jobs(max_count: int = 50, max_age_hours: int = 24) -> int:
     """Removes records beyond max_count or older than max_age_hours, and deletes their output files."""
     init_db()
-    now_ts = time.time()
-    cutoff_ts = now_ts - (max_age_hours * 3600)
-    cutoff_iso = datetime.utcfromtimestamp(cutoff_ts).isoformat()
-
-    deleted_count = 0
-    with get_connection() as conn:
-        # 1. Prune by age
-        cur = conn.execute("SELECT id FROM jobs WHERE created_at < ?", (cutoff_iso,))
-        expired_ids = [r["id"] for r in cur.fetchall()]
-
-        # 2. Prune by max_count
-        cur = conn.execute("SELECT id FROM jobs ORDER BY created_at DESC LIMIT -1 OFFSET ?", (max_count,))
-        overflow_ids = [r["id"] for r in cur.fetchall()]
-
-        ids_to_remove = set(expired_ids + overflow_ids)
-        for jid in ids_to_remove:
-            conn.execute("DELETE FROM jobs WHERE id = ?", (jid,))
-            # Delete output directory for job
-            job_dir = DB_DIR / jid
-            if job_dir.exists() and job_dir.is_dir():
-                shutil.rmtree(job_dir, ignore_errors=True)
-            deleted_count += 1
-        conn.commit()
-
-    return deleted_count
+    cutoff_iso = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).replace(tzinfo=None).isoformat()
+    with connect() as conn:
+        expired = conn.execute("SELECT id FROM jobs WHERE created_at < ?", (cutoff_iso,)).fetchall()
+        overflow = conn.execute(
+            "SELECT id FROM jobs ORDER BY created_at DESC LIMIT -1 OFFSET ?", (max_count,)
+        ).fetchall()
+        ids_to_remove = {r["id"] for r in expired + overflow}
+        conn.executemany("DELETE FROM jobs WHERE id = ?", [(jid,) for jid in ids_to_remove])
+    for jid in ids_to_remove:  # their output directories, once the rows are gone
+        job_dir = DB_DIR / jid
+        if job_dir.is_dir():
+            shutil.rmtree(job_dir, ignore_errors=True)
+    return len(ids_to_remove)

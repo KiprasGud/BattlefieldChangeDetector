@@ -4,12 +4,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import cv2
 import numpy as np
-import math
 import pytest
 from pathlib import Path
 
 from app.alignment import align, harmonize_resolution
-from app.alignment.register import write_debug_overlay, normalize_brightness
+from app.alignment.register import normalize_brightness
 from app.diff.heatmap import candidate_boxes, change_heatmap
 
 SAMPLES = Path(__file__).resolve().parents[2] / "shared" / "sample_data"
