@@ -4,6 +4,7 @@ import argparse
 import cv2
 from dotenv import load_dotenv
 
+from ..alignment import IMREAD_PIXELS, align
 from . import analyze
 
 
@@ -16,10 +17,11 @@ def main():
     p.add_argument("--lang", default="en")
     args = p.parse_args()
 
-    a, b = cv2.imread(args.image_a), cv2.imread(args.image_b)
+    a, b = cv2.imread(args.image_a, IMREAD_PIXELS), cv2.imread(args.image_b, IMREAD_PIXELS)
     if a is None or b is None:
         raise SystemExit("Could not read one of the images")
-    print(analyze(a, b, args.criteria, args.lang).model_dump_json(indent=2))
+    aligned = align(a, b)  # same input Gemini gets in the pipeline
+    print(analyze(a, aligned.aligned_b, args.criteria, args.lang, aligned=aligned.ok).model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

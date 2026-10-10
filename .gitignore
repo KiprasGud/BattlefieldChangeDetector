@@ -7,3 +7,4 @@ node_modules/
 dist/
 backend/output/
 .pytest_cache/
+.idea/

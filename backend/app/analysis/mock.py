@@ -1,8 +1,9 @@
 """Offline analysis (MOCK_LLM=1).
 
-Known demo pairs (shared/sample_data/<pair>/a.jpg with shared/fixtures/<pair>.json) are recognized by a
-thumbnail signature of image A and return boxes on their real changes, filtered by the criteria, in the
-requested language. Unknown images fall back to the generic fixture.
+Known demo pairs (shared/sample_data/<pair>/a.jpg with shared/fixtures/<pair>.json) are recognized visually in
+image A, whatever its resolution, crop, rotation or mirroring, and return boxes on their real changes, mapped into
+the uploaded frame, filtered by the criteria, in the requested language. Unknown images fall back to the generic
+fixture.
 """
 import json
 from functools import lru_cache
@@ -12,15 +13,17 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from ..alignment import IMREAD_PIXELS, estimate_homography, extract_features
 from ..contracts import AnalysisResult
-from .postprocess import to_result
+from .postprocess import clean_box, to_result
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = ROOT / "shared" / "fixtures"
 SAMPLES_DIR = ROOT / "shared" / "sample_data"
 FIXTURE = FIXTURES_DIR / "sample_result.json"
 
-MATCH_THRESHOLD = 6.0  # mean abs difference of 32x32 gray thumbnails (0-255)
+MIN_VISIBLE = 0.5  # a mapped fixture box must keep at least half its area inside the uploaded image
+MATCH_SIDE, MATCH_FEATURES = 640, 2000  # recognition only needs a coarse homography: smaller = faster
 
 # tag -> criteria keywords (English + Lithuanian stems)
 TAG_KEYWORDS = {
@@ -39,27 +42,42 @@ NO_MATCH_SUMMARY = {
 }
 
 
-def _signature(img: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-    return cv2.resize(gray, (32, 32), interpolation=cv2.INTER_AREA).astype(np.float32)
-
-
 @lru_cache(maxsize=1)
 def _known_pairs() -> tuple:
     pairs = []
     for fixture in sorted(FIXTURES_DIR.glob("pair*.json")):
-        img = cv2.imread(str(SAMPLES_DIR / fixture.stem / "a.jpg"))
+        img = cv2.imread(str(SAMPLES_DIR / fixture.stem / "a.jpg"), IMREAD_PIXELS)
         if img is not None:
-            pairs.append((fixture.stem, _signature(img)))
+            pairs.append((fixture.stem, extract_features(img, MATCH_SIDE, MATCH_FEATURES)))
     return tuple(pairs)
 
 
-def match_pair(img_a: np.ndarray) -> Optional[str]:
+def match_pair(img_a: np.ndarray) -> Optional[tuple[str, np.ndarray, tuple]]:
+    """(pair name, homography sample A -> img_a, sample A shape) for the known pair visible in img_a, else None."""
     if img_a is None or img_a.size == 0:
         return None
-    sig = _signature(img_a)
-    best = min(((float(np.mean(np.abs(sig - s))), name) for name, s in _known_pairs()), default=None)
-    return best[1] if best and best[0] < MATCH_THRESHOLD else None
+    target = extract_features(img_a, MATCH_SIDE, MATCH_FEATURES)
+    best = None
+    for name, sample in _known_pairs():
+        reg = estimate_homography(None, None, src_features=sample, dst_features=target)
+        if reg is not None and (best is None or reg.inliers > best[0]):
+            best = (reg.inliers, name, reg.H, sample.full_shape)
+    return best[1:] if best else None
+
+
+def map_box(box: list[int], H: np.ndarray, src_shape, dst_shape) -> Optional[list[int]]:
+    """0-1000 box in the sample frame -> 0-1000 box in the uploaded frame; None if it falls mostly outside."""
+    hs, ws = src_shape[:2]
+    hd, wd = dst_shape[:2]
+    y0, x0, y1, x1 = (v / 1000 for v in box)
+    corners = np.float64([[x0 * ws, y0 * hs], [x1 * ws, y0 * hs], [x1 * ws, y1 * hs], [x0 * ws, y1 * hs]])
+    proj = cv2.perspectiveTransform(corners.reshape(-1, 1, 2), H).reshape(-1, 2)
+    (px0, py0), (px1, py1) = proj.min(axis=0), proj.max(axis=0)
+    cx0, cy0, cx1, cy1 = max(px0, 0), max(py0, 0), min(px1, wd), min(py1, hd)
+    full = (px1 - px0) * (py1 - py0)
+    if full <= 0 or cx1 <= cx0 or cy1 <= cy0 or (cx1 - cx0) * (cy1 - cy0) < MIN_VISIBLE * full:
+        return None
+    return clean_box([cy0 / hd * 1000, cx0 / wd * 1000, cy1 / hd * 1000, cx1 / wd * 1000])
 
 
 def criteria_tags(criteria: str) -> set[str]:
@@ -72,13 +90,20 @@ def _pick(value, lang: str) -> str:
 
 
 def analyze_mock(img_a, aligned_b, criteria: str, lang: str = "en") -> AnalysisResult:
-    pair = match_pair(img_a)
-    if pair is None:
-        return to_result(json.loads(FIXTURE.read_text(encoding="utf-8")))
+    match = match_pair(img_a)
+    if match is None:
+        return to_result(json.loads(FIXTURE.read_text(encoding="utf-8")), image_b=aligned_b)
 
+    pair, H, sample_shape = match
     data = json.loads((FIXTURES_DIR / f"{pair}.json").read_text(encoding="utf-8"))
     wanted = criteria_tags(criteria)
-    changes = [c for c in data["changes"] if not wanted or wanted & set(c.get("tags", []))]
+    changes = []
+    for c in data["changes"]:
+        if wanted and not wanted & set(c.get("tags", [])):
+            continue
+        box = map_box(c["box"], H, sample_shape, img_a.shape)
+        if box is not None:
+            changes.append({**c, "box": box})
     raw = {
         "summary": _pick(data["summary"], lang) if changes else NO_MATCH_SUMMARY.get(lang, NO_MATCH_SUMMARY["en"]),
         "recommendation": _pick(data["recommendation"], lang) if changes else "",
@@ -93,4 +118,4 @@ def analyze_mock(img_a, aligned_b, criteria: str, lang: str = "en") -> AnalysisR
             for c in changes
         ],
     }
-    return to_result(raw)
+    return to_result(raw, image_b=aligned_b)

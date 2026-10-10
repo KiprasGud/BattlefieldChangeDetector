@@ -4,6 +4,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 from app.analysis import analyze
 from app.analysis import cache, gemini_client, tiling
@@ -64,9 +65,11 @@ class _FakeModels:
     def __init__(self, payloads):
         self.payloads = list(payloads)
         self.calls = 0
+        self.requests = []  # (model, contents, config) per call
 
     def generate_content(self, model, contents, config):
         self.calls += 1
+        self.requests.append((model, contents, config))
         payload = self.payloads.pop(0)
         if isinstance(payload, Exception):
             raise payload
@@ -129,6 +132,78 @@ def test_prompt_lists_hints_and_black_area():
     assert "CANDIDATE" not in build_prompt("tracks", "en")
 
 
+def test_prompt_states_alignment_status():
+    assert "already geometrically aligned" in build_prompt("tracks", "en")
+    unaligned = build_prompt("tracks", "en", aligned=False)
+    assert "alignment FAILED" in unaligned and "already geometrically aligned" not in unaligned
+
+
+# --- Gemini 3.5 Flash-Lite request shape and failure policy ---------------------------------------
+
+def _image_parts(contents):
+    return [p for p in contents if not isinstance(p, str)]
+
+
+def test_default_model_request_shape(monkeypatch):
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+    client = _FakeClient([_llm_json([0, 0, 200, 200])])
+    img = np.full((100, 100, 3), 120, np.uint8)
+    gemini_client.analyze_with_gemini(img, img, "tracks", client=client, verify=False)
+    model, contents, config = client.models.requests[0]
+    assert model == "gemini-3.5-flash-lite"
+    assert config.temperature is None  # deprecated on Gemini 3.x
+    assert config.thinking_config.thinking_level.value == "MINIMAL"
+    parts = _image_parts(contents)
+    assert len(parts) == 2 and all(p.media_resolution.level.value == "MEDIA_RESOLUTION_HIGH" for p in parts)
+
+
+def test_legacy_model_keeps_temperature(monkeypatch):
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    client = _FakeClient([_llm_json([0, 0, 200, 200])])
+    img = np.full((100, 100, 3), 120, np.uint8)
+    gemini_client.analyze_with_gemini(img, img, "tracks", client=client, verify=False)
+    _, contents, config = client.models.requests[0]
+    assert config.temperature == 0.2 and config.thinking_config is None
+    assert all(p.media_resolution is None for p in _image_parts(contents))
+
+
+def test_client_error_is_not_retried(monkeypatch):
+    from google.genai import errors
+    monkeypatch.setattr(gemini_client.time, "sleep", lambda s: None)
+    missing = errors.ClientError(404, {"error": {"code": 404, "message": "model not found", "status": "NOT_FOUND"}})
+    client = _FakeClient([missing, _llm_json([0, 0, 200, 200])])
+    img = np.full((100, 100, 3), 120, np.uint8)
+    with pytest.raises(gemini_client.GeminiError, match="404"):
+        gemini_client.analyze_with_gemini(img, img, "tracks", client=client, verify=False)
+    assert client.models.calls == 1
+
+
+def test_server_error_is_retried(monkeypatch):
+    from google.genai import errors
+    monkeypatch.setattr(gemini_client.time, "sleep", lambda s: None)
+    busy = errors.ServerError(503, {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}})
+    client = _FakeClient([busy, _llm_json([0, 0, 200, 200])])
+    img = np.full((100, 100, 3), 120, np.uint8)
+    r = gemini_client.analyze_with_gemini(img, img, "tracks", client=client, verify=False)
+    assert client.models.calls == 2 and len(r.changes) == 1
+
+
+def test_tiled_analysis_verifies_once(monkeypatch):
+    import app.analysis as analysis_pkg
+    for k, v in {"MOCK_LLM": "0", "GEMINI_API_KEY": "test", "ANALYSIS_CACHE": "0", "ANALYSIS_VERIFY": "1",
+                 "ANALYSIS_TILING": "1", "ANALYSIS_TILE_MIN_SIDE": "100", "ANALYSIS_TILE_GRID": "4"}.items():
+        monkeypatch.setenv(k, v)
+    verdicts = json.dumps({"verdicts": [{"index": 1, "real": True, "matches_criteria": True, "reason": "ok"}]})
+    client = _FakeClient([_llm_json([100, 100, 300, 300])] * 17 + [verdicts])
+    monkeypatch.setattr(analysis_pkg, "make_client", lambda: client)
+    img = np.full((400, 400, 3), 120, np.uint8)
+    analyze(img, img, "tracks")
+    requests = client.models.requests
+    assert len(requests) == 1 + 16 + 1  # full image + 4x4 tiles + one verification (was one per tile)
+    assert requests[-1][2].response_schema is gemini_client.LLMVerification
+
+
 # --- mock fixtures -------------------------------------------------------------------------------
 
 def _sample(pair, name="a"):
@@ -156,6 +231,28 @@ def test_mock_lithuanian_and_unknown_criteria():
 def test_mock_unknown_image_uses_generic_fixture():
     img = np.random.default_rng(0).integers(0, 255, (60, 80, 3), dtype=np.uint8)
     assert analyze(img, img, "tracks").changes
+
+
+def _expected_box(box, T, src_shape, dst_shape):
+    """Fixture box (0-1000, sample frame) carried through the known transform T, clipped to the new frame."""
+    h, w = src_shape[:2]
+    hd, wd = dst_shape[:2]
+    y0, x0, y1, x1 = (v / 1000 for v in box)
+    p = T @ np.array([[x0 * w, x1 * w, x1 * w, x0 * w], [y0 * h, y0 * h, y1 * h, y1 * h], [1, 1, 1, 1]])
+    xs, ys = np.clip(p[0] / p[2], 0, wd), np.clip(p[1] / p[2], 0, hd)
+    return [ys.min() / hd * 1000, xs.min() / wd * 1000, ys.max() / hd * 1000, xs.max() / wd * 1000]
+
+
+@pytest.mark.parametrize("kind", ["hflip", "rot90", "crop10", "scale0.5", "bright"])
+def test_mock_recognizes_transformed_sample(kind, transform):
+    a = _sample("pair01")
+    moved, T = transform(a, kind)
+    r = analyze(moved, moved, "New vehicle tracks, craters / digging")
+    fixture = json.loads((ROOT / "shared" / "fixtures" / "pair01.json").read_text(encoding="utf-8"))
+    expected = [_expected_box(c["box"], T, a.shape, moved.shape) for c in fixture["changes"]]
+    assert len(r.changes) == len(expected)
+    for want in expected:
+        assert max(tiling.iou(c.box, want) for c in r.changes) >= 0.7
 
 
 # --- tiling + cache ------------------------------------------------------------------------------
