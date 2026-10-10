@@ -1,4 +1,4 @@
-import { useState, useRef, type CSSProperties, type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from "react";
+import { useState, useRef, type CSSProperties, type PointerEvent as ReactPointerEvent, type KeyboardEvent } from "react";
 import type { AnalyzeResponse, Change } from "../types";
 
 interface Props {
@@ -7,52 +7,45 @@ interface Props {
   onSelectIndex: (index: number | null) => void;
 }
 
-type ViewMode = "slider" | "annotated" | "side_by_side" | "heatmap";
+type ViewMode = "slider" | "annotated" | "split" | "heatmap";
 
-// Pointer travel (px) below which a press counts as a click, not a drag.
 const DRAG_THRESHOLD = 4;
 
-/** <img> that shows a readable placeholder instead of the broken-image icon. */
 function SafeImg({ src, alt, className, style }: { src?: string; alt: string; className?: string; style?: CSSProperties }) {
   const [failed, setFailed] = useState<string | null>(null);
   if (!src || failed === src) {
     return (
       <div className={`img-missing ${className ?? ""}`} style={style}>
-        {alt}: image unavailable
+        [ERR] {alt} UNAVAILABLE
       </div>
     );
   }
   return <img src={src} alt={alt} className={className} style={style} draggable={false} onError={() => setFailed(src)} />;
 }
 
-/** Change boxes positioned in % of the image frame (box = [ymin, xmin, ymax, xmax], 0-1000). */
-function BoxOverlay({
+function TacticalBoxOverlay({
   changes,
   selectedIndex,
   onSelect,
-  outlined,
 }: {
   changes: Change[];
   selectedIndex: number | null;
   onSelect?: (idx: number) => void;
-  outlined: boolean; // false when the image already has burned-in boxes
 }) {
   return (
-    <div className="box-layer">
+    <div className="box-layer" style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
       {changes.map((c, idx) => {
         const [ymin, xmin, ymax, xmax] = c.box.map((v) => Math.max(0, Math.min(1000, v)) / 10);
         const isSelected = selectedIndex === idx;
         return (
           <div
             key={idx}
-            id={`box-${idx}`}
             data-box={idx}
-            className={`change-box${isSelected ? " selected" : ""}${outlined ? " outlined" : ""}`}
-            title={`#${idx + 1} ${c.type} (${c.confidence})`}
+            className={`tactical-box ${isSelected ? "selected" : ""}`}
             onClick={onSelect ? () => onSelect(idx) : undefined}
             style={{ top: `${ymin}%`, left: `${xmin}%`, width: `${xmax - xmin}%`, height: `${ymax - ymin}%` }}
           >
-            {(outlined || isSelected) && <span className="change-box-label">#{idx + 1}</span>}
+            <span className="tactical-box-label">[TRGT-{String(idx + 1).padStart(2, '0')}]</span>
           </div>
         );
       })}
@@ -60,51 +53,34 @@ function BoxOverlay({
   );
 }
 
-function ModeButton({
-  active,
-  onClick,
-  id,
-  accent = "cyan",
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  id: string;
-  accent?: "cyan" | "amber";
-  children: ReactNode;
-}) {
-  return (
-    <button type="button" id={id} onClick={onClick} className={`mode-btn ${accent}${active ? " active" : ""}`} aria-pressed={active}>
-      {children}
-    </button>
-  );
-}
-
 export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Props) {
   const [mode, setMode] = useState<ViewMode>("slider");
-  const [sliderPos, setSliderPos] = useState(50); // percentage 0-100
+  const [sliderPos, setSliderPos] = useState(50);
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.65);
-  const [showHeatmapOverlay, setShowHeatmapOverlay] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: number; startX: number; moved: boolean; boxIdx: number | null } | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   const changes = data.result.changes;
   const beforeUrl = data.images.image_a_url || data.images.aligned_b_url;
   const alignedUrl = data.images.aligned_b_url || data.images.annotated_url;
   const annotatedUrl = data.images.annotated_url;
   const heatmapUrl = data.images.heatmap_url;
-  // Old jobs may have no heatmap; never leave the viewer empty.
-  const view: ViewMode = mode === "heatmap" && !heatmapUrl ? "slider" : mode;
 
+  const view: ViewMode = mode === "heatmap" && !heatmapUrl ? "slider" : mode;
   const toggleSelect = (idx: number) => onSelectIndex(selectedIndex === idx ? null : idx);
 
   const posFromClientX = (clientX: number) => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0) return;
-    setSliderPos(Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100)));
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect && rect.width > 0) {
+        setSliderPos(Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100)));
+      }
+      rafRef.current = null;
+    });
   };
 
-  // Press anywhere on the image: drag moves the divider, a plain click selects a box (or jumps the divider).
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     const boxEl = (e.target as HTMLElement).closest("[data-box]");
@@ -145,164 +121,95 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex }: Pro
     e.preventDefault();
   };
 
-  const heatmapLayer =
-    showHeatmapOverlay && heatmapUrl ? (
-      <img src={heatmapUrl} alt="" className="layer-fill" draggable={false} style={{ opacity: heatmapOpacity, mixBlendMode: "screen" }} />
-    ) : null;
-
   return (
-    <div id="result-viewer" className="glass-panel panel">
-      {/* Top status bar: Alignment quality & mode tabs */}
-      <div className="viewer-toolbar">
-        <div className="viewer-meta">
-          <div className={`align-badge ${data.align_ok ? "ok" : "bad"}`}>
-            <span className="dot" />
-            <span className="align-badge-text">{data.align_ok ? "ALIGNED" : "ALIGNMENT DEGRADED"}</span>
-            <span className="mono dim small">({(data.align_quality * 100).toFixed(0)}% quality)</span>
-          </div>
-          {data.align_method && <span className="chip mono">METHOD: {data.align_method.toUpperCase()}</span>}
-          <span className="mono dim small">MISSION: #{data.job_id}</span>
-        </div>
-
-        <div className="mode-group" role="group" aria-label="View mode">
-          <ModeButton id="mode-slider-btn" active={view === "slider"} onClick={() => setMode("slider")}>↔ Slider</ModeButton>
-          <ModeButton id="mode-annotated-btn" active={view === "annotated"} onClick={() => setMode("annotated")}>🎯 HUD</ModeButton>
-          <ModeButton id="mode-side-by-side-btn" active={view === "side_by_side"} onClick={() => setMode("side_by_side")}>◫ Split</ModeButton>
-          {heatmapUrl && (
-            <ModeButton id="mode-heatmap-btn" accent="amber" active={view === "heatmap"} onClick={() => setMode("heatmap")}>
-              🔥 Heatmap
-            </ModeButton>
-          )}
-        </div>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div className="view-controls">
+        <button className={`tactical-toggle ${view === "slider" ? "active" : ""}`} onClick={() => setMode("slider")}>[1] SLIDER</button>
+        <button className={`tactical-toggle ${view === "annotated" ? "active" : ""}`} onClick={() => setMode("annotated")}>[2] HUD</button>
+        <button className={`tactical-toggle ${view === "split" ? "active" : ""}`} onClick={() => setMode("split")}>[3] SPLIT</button>
+        {heatmapUrl && (
+          <button className={`tactical-toggle ${view === "heatmap" ? "active" : ""}`} onClick={() => setMode("heatmap")}>[4] HEATMAP</button>
+        )}
       </div>
 
-      {/* Warnings Banner */}
-      {data.warnings && data.warnings.length > 0 && (
-        <div className="warning-banner">
-          <span style={{ fontSize: "1.2rem" }}>⚠️</span>
-          <div>
-            <strong>Operational Warnings:</strong>
-            <ul className="warning-list">
-              {data.warnings.map((w, idx) => (
-                <li key={idx}>{w}</li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      )}
-
-      {/* Timings + heatmap overlay controls */}
-      {((data.timings && Object.keys(data.timings).length > 0) || (heatmapUrl && view !== "heatmap")) && (
-        <div className="viewer-subbar">
-          {data.timings && Object.keys(data.timings).length > 0 && (
-            <div className="timings">
-              <span className="mono dim xsmall upper">LATENCY:</span>
-              {Object.entries(data.timings).map(([stage, sec]) => (
-                <span key={stage} className={`timing-chip mono${stage === "total" ? " total" : ""}`}>
-                  {stage}: {Number(sec).toFixed(2)}s
-                </span>
-              ))}
-            </div>
-          )}
-
-          {heatmapUrl && view !== "heatmap" && view !== "side_by_side" && (
-            <div className="heatmap-controls">
-              <label>
-                <input type="checkbox" checked={showHeatmapOverlay} onChange={(e) => setShowHeatmapOverlay(e.target.checked)} />
-                Overlay change heatmap
-              </label>
-              {showHeatmapOverlay && (
-                <input
-                  type="range"
-                  min="0.1"
-                  max="1"
-                  step="0.05"
-                  value={heatmapOpacity}
-                  onChange={(e) => setHeatmapOpacity(parseFloat(e.target.value))}
-                  aria-label="Heatmap opacity"
-                  title={`Opacity: ${(heatmapOpacity * 100).toFixed(0)}%`}
-                />
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Main View Area */}
-      {view === "slider" && (
-        <div
-          ref={containerRef}
-          id="slider-container"
-          className="image-frame slider-frame"
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={() => (drag.current = null)}
-        >
-          {/* Bottom layer: aligned recon (clean, boxes come from the overlay) */}
-          <SafeImg src={alignedUrl} alt="Aligned recon" className="layer-base" />
-          {heatmapLayer}
-
-          {/* Top layer: baseline clipped to the left of the divider */}
-          <div className="layer-fill" style={{ clipPath: `inset(0 ${100 - sliderPos}% 0 0)` }}>
-            <SafeImg src={beforeUrl} alt="Baseline" className="layer-fill" />
-          </div>
-
-          <BoxOverlay changes={changes} selectedIndex={selectedIndex} outlined />
-
-          {/* Divider */}
+      <div style={{ flexGrow: 1, position: "relative" }}>
+        {view === "slider" && (
           <div
-            id="slider-divider-handle"
-            className="slider-handle"
-            style={{ left: `${sliderPos}%` }}
-            role="slider"
-            tabIndex={0}
-            aria-label="Before/after divider"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(sliderPos)}
-            onKeyDown={onHandleKey}
+            ref={containerRef}
+            className="diff-container"
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={() => (drag.current = null)}
+            style={{ cursor: "ew-resize", touchAction: "pan-y", height: "100%" }}
           >
-            <div className="slider-knob">↔</div>
+            <SafeImg src={alignedUrl} alt="Aligned recon" className="diff-layer" />
+            
+            <div className="diff-layer" style={{ clipPath: `inset(0 ${100 - sliderPos}% 0 0)` }}>
+              <SafeImg src={beforeUrl} alt="Baseline" className="diff-layer" />
+            </div>
+
+            <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} />
+
+            <div
+              className="slider-divider"
+              style={{ left: `${sliderPos}%` }}
+              role="slider"
+              tabIndex={0}
+              aria-label="Before/after divider"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(sliderPos)}
+              onKeyDown={onHandleKey}
+            />
+
+            <div className="diff-label" style={{ left: "12px" }}>BASELINE</div>
+            <div className="diff-label" style={{ right: "12px", color: "var(--accent-exec)" }}>RECON</div>
           </div>
+        )}
 
-          <div className="frame-label left">◀ BASELINE (PAST)</div>
-          <div className="frame-label right accent">RECON (ALIGNED) ▶</div>
-        </div>
-      )}
+        {view === "annotated" && (
+          <div className="diff-container" style={{ height: "100%" }}>
+            <SafeImg src={annotatedUrl} alt="Annotated output" className="diff-layer" />
+            <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} />
+          </div>
+        )}
 
-      {view === "annotated" && (
-        <div className="image-frame">
-          <SafeImg src={annotatedUrl} alt="Annotated output" className="layer-base" />
-          {heatmapLayer}
-          <BoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} outlined={false} />
-        </div>
-      )}
-
-      {view === "side_by_side" && (
-        <div className="split-view">
-          <div>
-            <div className="split-label mono">IMAGE A (BASELINE)</div>
-            <div className="image-frame">
-              <SafeImg src={beforeUrl} alt="Baseline" className="layer-base" />
+        {view === "split" && (
+          <div className="diff-container" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px", background: "var(--border-main)", height: "100%" }}>
+            <div style={{ position: "relative", background: "var(--bg-app)" }}>
+              <SafeImg src={beforeUrl} alt="Baseline" className="diff-layer" />
+              <div className="diff-label" style={{ left: "12px" }}>BASELINE</div>
+            </div>
+            <div style={{ position: "relative", background: "var(--bg-app)" }}>
+              <SafeImg src={annotatedUrl} alt="Annotated" className="diff-layer" />
+              <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} />
+              <div className="diff-label" style={{ left: "12px", color: "var(--accent-exec)" }}>RECON</div>
             </div>
           </div>
-          <div>
-            <div className="split-label mono accent">IMAGE B (ALIGNED &amp; ANNOTATED)</div>
-            <div className="image-frame">
-              <SafeImg src={annotatedUrl} alt="Annotated" className="layer-base" />
-              <BoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} outlined={false} />
+        )}
+
+        {view === "heatmap" && heatmapUrl && (
+          <div className="diff-container" style={{ height: "100%" }}>
+            <SafeImg src={alignedUrl} alt="Base" className="diff-layer" />
+            <SafeImg src={heatmapUrl} alt="Heatmap" className="diff-layer" style={{ opacity: heatmapOpacity, mixBlendMode: "screen" }} />
+            <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} />
+            
+            <div style={{ position: "absolute", bottom: "12px", right: "12px", display: "flex", alignItems: "center", gap: "8px", background: "var(--bg-panel)", padding: "4px 8px", border: "1px solid var(--border-main)" }}>
+              <span className="fs-xs mono text-warn">HEATMAP OPACITY: {(heatmapOpacity * 100).toFixed(0)}%</span>
+              <input
+                type="range"
+                min="0.1"
+                max="1"
+                step="0.05"
+                value={heatmapOpacity}
+                onChange={(e) => setHeatmapOpacity(parseFloat(e.target.value))}
+                style={{ accentColor: "var(--accent-warn)" }}
+              />
             </div>
           </div>
-        </div>
-      )}
-
-      {view === "heatmap" && heatmapUrl && (
-        <div className="image-frame">
-          <SafeImg src={heatmapUrl} alt="Change heatmap" className="layer-base" />
-          <BoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} outlined />
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

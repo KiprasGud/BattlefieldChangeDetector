@@ -143,25 +143,22 @@ export default function ReportPanel({ data, selectedIndex, onSelectIndex }: Prop
       {/* ============================================================
           SCREEN REPORT PANEL
           ============================================================ */}
-      <div className="glass-panel panel">
+      <div className="panel">
         {/* Header & Export Actions */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", marginBottom: "20px", paddingBottom: "16px", borderBottom: "1px solid var(--border-subtle)" }}>
+        <div className="section-head" style={{ borderBottom: "1px solid var(--border-subtle)", paddingBottom: "var(--space-4)" }}>
           <div>
-            <h2 style={{ fontSize: "1.15rem", fontWeight: 700, letterSpacing: "0.02em" }}>
-              Tactical Intelligence Report
-            </h2>
-            <div style={{ fontSize: "0.78rem", fontFamily: "var(--font-mono)", color: "var(--text-dim)", marginTop: "3px" }}>
+            <h2>Tactical Intelligence Report</h2>
+            <div className="mono dim small" style={{ marginTop: "var(--space-1)" }}>
               DATE: {result.report_date} • TARGETS DETECTED: {result.changes.length}
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+          <div className="chip-row">
             <button
               type="button"
               id="copy-report-json-btn"
               onClick={handleCopyJson}
               className="btn-secondary"
-              style={{ fontSize: "0.8rem" }}
             >
               {copyState === "copied" ? "✓ Copied" : copyState === "failed" ? "✕ Clipboard blocked" : "📋 Copy JSON"}
             </button>
@@ -170,7 +167,6 @@ export default function ReportPanel({ data, selectedIndex, onSelectIndex }: Prop
               id="download-report-json-btn"
               onClick={handleDownloadJson}
               className="btn-secondary"
-              style={{ fontSize: "0.8rem" }}
             >
               💾 Download JSON
             </button>
@@ -179,7 +175,7 @@ export default function ReportPanel({ data, selectedIndex, onSelectIndex }: Prop
               href={data.images.annotated_url}
               download={`annotated_${data.job_id}.jpg`}
               className="btn-secondary"
-              style={{ fontSize: "0.8rem", textDecoration: "none" }}
+              style={{ textDecoration: "none" }}
             >
               🖼️ Download Image
             </a>
@@ -188,7 +184,6 @@ export default function ReportPanel({ data, selectedIndex, onSelectIndex }: Prop
               id="print-report-btn"
               onClick={handlePrintReport}
               className="btn-secondary"
-              style={{ fontSize: "0.8rem" }}
             >
               🖨️ Print Briefing
             </button>
@@ -196,21 +191,21 @@ export default function ReportPanel({ data, selectedIndex, onSelectIndex }: Prop
         </div>
 
         {/* Situation & Recommendation cards */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(300px, 100%), 1fr))", gap: "16px", marginBottom: "24px" }}>
-          <div style={{ background: "rgba(15, 23, 42, 0.6)", border: "1px solid var(--border-subtle)", borderRadius: "8px", padding: "16px" }}>
-            <div style={{ fontSize: "0.76rem", fontFamily: "var(--font-mono)", color: "var(--accent-cyan)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px" }}>
+        <div className="upload-grid">
+          <div style={{ background: "var(--bg-app)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)", padding: "var(--space-4)" }}>
+            <div className="mono upper small" style={{ color: "var(--brand-base)", letterSpacing: "0.08em", marginBottom: "var(--space-2)", fontWeight: 600 }}>
               Situation Assessment
             </div>
-            <p style={{ fontSize: "0.92rem", color: "var(--text-main)", lineHeight: 1.55 }}>
+            <p className="dim">
               {result.summary}
             </p>
           </div>
 
-          <div style={{ background: "rgba(15, 23, 42, 0.6)", border: "1px solid var(--border-subtle)", borderRadius: "8px", padding: "16px" }}>
-            <div style={{ fontSize: "0.76rem", fontFamily: "var(--font-mono)", color: "var(--accent-amber)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "6px" }}>
+          <div style={{ background: "var(--bg-app)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)", padding: "var(--space-4)" }}>
+            <div className="mono upper small" style={{ color: "var(--accent-warning)", letterSpacing: "0.08em", marginBottom: "var(--space-2)", fontWeight: 600 }}>
               Operational Recommendation
             </div>
-            <p style={{ fontSize: "0.92rem", color: "var(--text-main)", lineHeight: 1.55 }}>
+            <p className="dim">
               {result.recommendation}
             </p>
           </div>
@@ -218,21 +213,21 @@ export default function ReportPanel({ data, selectedIndex, onSelectIndex }: Prop
 
         {/* Target Changes List */}
         <div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px", marginBottom: "14px" }}>
-            <h3 style={{ fontSize: "0.95rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--text-muted)" }}>
+          <div className="section-head">
+            <h3>
               Detected Targets ({result.changes.length})
             </h3>
-            <span style={{ fontSize: "0.74rem", color: "var(--text-dim)" }}>
+            <span className="xsmall dim">
               Click to highlight target on imagery
             </span>
           </div>
 
           {result.changes.length === 0 ? (
-            <div style={{ padding: "30px", textAlign: "center", color: "var(--text-dim)", background: "rgba(15, 23, 42, 0.4)", borderRadius: "8px" }}>
+            <div className="empty-state">
               No changes detected matching specified criteria.
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
               {result.changes.map((c, idx) => {
                 const isSelected = selectedIndex === idx;
                 const confClass =
@@ -258,38 +253,28 @@ export default function ReportPanel({ data, selectedIndex, onSelectIndex }: Prop
                       }
                     }}
                     style={{
-                      alignItems: "start",
-                      gap: "16px",
-                      padding: "14px 18px",
-                      borderRadius: "8px",
-                      background: isSelected ? "rgba(6, 182, 212, 0.12)" : "rgba(15, 23, 42, 0.5)",
-                      border: `1px solid ${isSelected ? "var(--accent-cyan)" : "var(--border-subtle)"}`,
-                      boxShadow: isSelected ? "0 0 16px rgba(6, 182, 212, 0.2)" : "none",
+                      background: isSelected ? "rgba(37, 99, 235, 0.05)" : "var(--bg-app)",
+                      borderColor: isSelected ? "var(--brand-base)" : "var(--border-subtle)",
                       cursor: "pointer",
                       transition: "all 0.15s ease",
+                      boxShadow: isSelected ? "0 0 0 1px var(--brand-base)" : "none",
                     }}
                   >
-                    <div
-                      style={{
-                        width: "32px",
-                        height: "32px",
-                        borderRadius: "6px",
-                        background: isSelected ? "var(--accent-cyan)" : "#1e293b",
-                        color: isSelected ? "#000" : "var(--text-main)",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        fontFamily: "var(--font-mono)",
-                        fontWeight: 700,
-                        fontSize: "0.85rem",
-                      }}
-                    >
+                    <div style={{ 
+                        background: isSelected ? "var(--brand-base)" : "var(--bg-app)",
+                        border: "1px solid",
+                        borderColor: isSelected ? "var(--brand-base)" : "var(--border-subtle)",
+                        width: "32px", height: "32px", borderRadius: "var(--radius-md)", 
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontFamily: "var(--font-mono)", fontWeight: 600, color: isSelected ? "#fff" : "var(--text-main)",
+                        fontSize: "14px"
+                    }}>
                       #{idx + 1}
                     </div>
 
                     <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginBottom: "4px" }}>
-                        <span style={{ fontWeight: 600, fontSize: "0.92rem", color: "var(--text-main)", textTransform: "capitalize" }}>
+                      <div className="chip-row" style={{ marginBottom: "var(--space-1)" }}>
+                        <span style={{ fontWeight: 600, textTransform: "capitalize" }}>
                           {c.type}
                         </span>
                         {c.sector && (
@@ -299,15 +284,15 @@ export default function ReportPanel({ data, selectedIndex, onSelectIndex }: Prop
                           {c.confidence} confidence
                         </span>
                       </div>
-                      <p style={{ fontSize: "0.84rem", color: "var(--text-muted)", marginBottom: "4px" }}>
+                      <p className="dim small" style={{ marginBottom: "var(--space-1)" }}>
                         {c.description}
                       </p>
-                      <div style={{ fontSize: "0.75rem", fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>
+                      <div className="xsmall mono dim">
                         Location: {c.location_text} • Box: [{c.box.join(", ")}]
                       </div>
                     </div>
 
-                    <div style={{ fontSize: "0.9rem", color: isSelected ? "var(--accent-cyan)" : "var(--text-dim)" }}>
+                    <div className="history-open" style={{ color: isSelected ? "var(--brand-base)" : "var(--text-muted)" }}>
                       {isSelected ? "● Viewing" : "○ Inspect"}
                     </div>
                   </div>
