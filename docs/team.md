@@ -61,24 +61,24 @@ Do not touch: analysis, API, UI.
 Goal: detections that are measurably good, a demo that never depends on the network.
 
 **M1 (0–3 h) — make the demo honest (#1, #2)**
-- [ ] Per-sample mock fixtures `shared/fixtures/pair01.json`, `pair02.json` (boxes on the real changes), selected by image hash; filter by criteria; Lithuanian text for `lang=lt`. Unknown images → generic fixture.
-- [ ] Get an API key and run real Gemini on every sample pair with `python -m app.analysis.cli`.
-- [ ] Compare 2 models (latency + quality); set the default in `GEMINI_MODEL` / `.env.example`.
-- [ ] Ignore the masked (black) area: tell the model in the prompt (#7).
+- [x] Per-sample mock fixtures `shared/fixtures/pair01.json`, `pair02.json` (boxes on the real changes), selected by image signature; filter by criteria; Lithuanian text for `lang=lt`. Unknown images → generic fixture.
+- [ ] Get an API key and run real Gemini on every sample pair with `python -m app.analysis.cli`. *(blocked: no key yet)*
+- [ ] Compare 2 models (latency + quality); set the default in `GEMINI_MODEL` / `.env.example`. *(harness ready: `python eval/run.py --models a,b`; needs key)*
+- [x] Ignore the masked (black) area: prompt rule + boxes mostly on black borders are dropped (#7).
 
 **M2 (3–6 h) — use the heatmap**
-- [ ] When `hints` are given, list them in the prompt ("verify or reject each candidate region").
-- [ ] Optionally send the heatmap as a third image.
-- [ ] Verification pass: re-check each reported box, drop rejected ones.
+- [x] When `hints` are given, list them in the prompt ("verify or reject each candidate region"). `analyze(..., hints=None)` is ready for P3 to pass P1's boxes.
+- [ ] Optionally send the heatmap as a third image. *(needs a contract change: `analyze` has no heatmap param)*
+- [x] Verification pass: re-check each reported box on A/B crops, drop rejected ones (`ANALYSIS_VERIFY=1`).
 
 **M3 (6–9 h) — evaluation harness (#8)**
-- [ ] `eval/labels/<pair>.json`: ground-truth boxes per criteria for 4+ pairs (with P1's new pairs).
-- [ ] `python -m eval.run` → precision / recall / mean IoU per pair and per config (hints on/off, tiling on/off, model) → `eval/results.md`.
-- [ ] Tune prompt and confidence threshold with it.
+- [ ] `eval/labels/<pair>.json`: ground-truth boxes per criteria for 4+ pairs (with P1's new pairs). *(pair01, pair02 done; pair03+ waits for P1)*
+- [x] `python eval/run.py` → precision / recall / mean IoU per pair and per config (mock, gemini, no-verify, tiled, hints, `--models`) → `eval/results.md`.
+- [ ] Tune prompt and confidence threshold with it. *(needs key)*
 
 **M4 (9–12 h) — tiling + caching (#13)**
-- [ ] 4×4 tiles with overlap for images > 2000 px; map tile boxes back; merge with NMS.
-- [ ] Cache results by (image hashes, criteria, lang, model) to save quota during the demo.
+- [x] Overlapping tiles (`ANALYSIS_TILE_GRID`, default 4×4) for images > 2000 px plus one full-image pass; tile boxes mapped back; merged with NMS.
+- [x] Cache results by (image contents, criteria, lang, hints, model, settings) in `backend/app/analysis/.cache`.
 Do not touch: OpenCV alignment, API, UI.
 
 ---

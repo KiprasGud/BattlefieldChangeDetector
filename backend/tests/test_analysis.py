@@ -1,11 +1,17 @@
 import json
+import sys
+from pathlib import Path
 
+import cv2
 import numpy as np
 
 from app.analysis import analyze
-from app.analysis import gemini_client
+from app.analysis import cache, gemini_client, tiling
 from app.analysis.postprocess import clean_box, normalize_confidence, sector_for, to_result
 from app.analysis.prompts import build_prompt
+
+ROOT = Path(__file__).resolve().parents[2]
+SAMPLES = ROOT / "shared" / "sample_data"
 
 
 def test_analyze_mock_matches_contract():
@@ -72,15 +78,134 @@ class _FakeClient:
         self.models = _FakeModels(payloads)
 
 
-def test_gemini_client_retries_and_parses(monkeypatch):
-    monkeypatch.setattr(gemini_client.time, "sleep", lambda s: None)
-    good = json.dumps({
+def _llm_json(*boxes):
+    return json.dumps({
         "summary": "Activity.",
         "recommendation": "Send drone.",
-        "changes": [{"type": "tracks", "description": "d", "location_text": "l", "confidence": "medium", "box": [600, 600, 900, 900]}],
+        "changes": [{"type": "tracks", "description": "d", "location_text": "l", "confidence": "medium", "box": b} for b in boxes],
     })
-    client = _FakeClient([RuntimeError("503"), good])
+
+
+def test_gemini_client_retries_and_parses(monkeypatch):
+    monkeypatch.setattr(gemini_client.time, "sleep", lambda s: None)
+    client = _FakeClient([RuntimeError("503"), _llm_json([600, 600, 900, 900])])
     img = np.zeros((50, 60, 3), np.uint8)
-    r = gemini_client.analyze_with_gemini(img, img, "tracks", client=client)
+    r = gemini_client.analyze_with_gemini(img, img, "tracks", client=client, verify=False)
     assert client.models.calls == 2
     assert r.changes[0].sector == "D4" and r.changes[0].confidence == "medium"
+
+
+def test_verification_drops_rejected():
+    verdicts = json.dumps({"verdicts": [
+        {"index": 1, "real": True, "matches_criteria": True, "reason": "ok"},
+        {"index": 2, "real": False, "matches_criteria": True, "reason": "shadow"},
+    ]})
+    client = _FakeClient([_llm_json([0, 0, 200, 200], [600, 600, 900, 900]), verdicts])
+    img = np.full((100, 100, 3), 120, np.uint8)
+    r = gemini_client.analyze_with_gemini(img, img, "tracks", client=client, verify=True)
+    assert client.models.calls == 2
+    assert [c.box for c in r.changes] == [[0, 0, 200, 200]]
+
+
+def test_verification_failure_keeps_detections(monkeypatch):
+    monkeypatch.setattr(gemini_client.time, "sleep", lambda s: None)
+    client = _FakeClient([_llm_json([0, 0, 200, 200]), RuntimeError("x"), RuntimeError("x"), RuntimeError("x")])
+    img = np.full((100, 100, 3), 120, np.uint8)
+    r = gemini_client.analyze_with_gemini(img, img, "tracks", client=client, verify=True)
+    assert len(r.changes) == 1
+
+
+def test_boxes_on_black_border_dropped():
+    img = np.full((100, 100, 3), 120, np.uint8)
+    img[:, 80:] = 0  # warp border on the right
+    raw = json.loads(_llm_json([0, 850, 300, 1000], [0, 0, 300, 300]))
+    r = to_result(raw, image_b=img)
+    assert [c.box for c in r.changes] == [[0, 0, 300, 300]]
+
+
+def test_prompt_lists_hints_and_black_area():
+    p = build_prompt("tracks", "en", hints=[[10, 20, 30, 40]])
+    assert "[10, 20, 30, 40]" in p and "Pure black" in p
+    assert "CANDIDATE" not in build_prompt("tracks", "en")
+
+
+# --- mock fixtures -------------------------------------------------------------------------------
+
+def _sample(pair, name="a"):
+    return cv2.imread(str(SAMPLES / pair / f"{name}.jpg"))
+
+
+def test_mock_pair01_boxes_follow_criteria():
+    a = _sample("pair01")
+    both = analyze(a, _sample("pair01", "b"), "New vehicle tracks, craters / digging")
+    assert {c.sector for c in both.changes} == {"D1", "B3"}
+    tracks = analyze(a, a, "New vehicle tracks")
+    assert len(tracks.changes) == 1 and tracks.changes[0].sector == "D1"
+    none = analyze(a, a, "Felled trees")
+    assert none.changes == [] and none.summary
+
+
+def test_mock_lithuanian_and_unknown_criteria():
+    a = _sample("pair02")
+    lt = analyze(a, a, "Nuvirtę medžiai", "lt")
+    assert len(lt.changes) == 1 and "medis" in lt.changes[0].type
+    everything = analyze(a, a, "anything unusual")
+    assert len(everything.changes) == 2
+
+
+def test_mock_unknown_image_uses_generic_fixture():
+    img = np.random.default_rng(0).integers(0, 255, (60, 80, 3), dtype=np.uint8)
+    assert analyze(img, img, "tracks").changes
+
+
+# --- tiling + cache ------------------------------------------------------------------------------
+
+def test_tile_box_roundtrip():
+    tiles = tiling.make_tiles(2000, 3000, 4)
+    assert len(tiles) == 16
+    tile = tiles[5]
+    full = [400, 400, 450, 450]
+    local = tiling.full_box_to_tile(full, tile, 2000, 3000)
+    back = tiling.tile_box_to_full(local, tile, 2000, 3000)
+    assert all(abs(x - y) <= 2 for x, y in zip(back, full))
+
+
+def test_nms_keeps_most_confident():
+    from app.contracts import Change
+    mk = lambda box, conf: Change(type="t", description="", location_text="", confidence=conf, box=box)
+    kept = tiling.nms([mk([0, 0, 100, 100], "low"), mk([5, 5, 100, 100], "high"), mk([500, 500, 600, 600], "low")])
+    assert [c.confidence for c in kept] == ["high", "low"] and len(kept) == 2
+
+
+def test_analyze_tiled_maps_boxes_back():
+    calls = []
+
+    def fake(img_a, img_b, criteria, lang, hints):
+        calls.append(img_a.shape)
+        return to_result(json.loads(_llm_json([0, 0, 500, 500])))
+
+    img = np.full((400, 400, 3), 100, np.uint8)
+    r = tiling.analyze_tiled(img, img, "x", "en", None, fake)
+    assert len(calls) == 1 + 16
+    assert all(0 <= v <= 1000 for c in r.changes for v in c.box)
+    assert any(c.box == [0, 0, 500, 500] for c in r.changes)
+
+
+def test_cache_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANALYSIS_CACHE_DIR", str(tmp_path))
+    img = np.zeros((10, 10, 3), np.uint8)
+    key = cache.make_key(img, img, "tracks", "en", [[1, 2, 3, 4]], {"model": "m"})
+    assert key != cache.make_key(img, img, "craters", "en", None, {"model": "m"})
+    assert cache.get(key) is None
+    result = to_result(json.loads(_llm_json([0, 0, 100, 100])))
+    cache.put(key, result)
+    assert cache.get(key).changes == result.changes
+
+
+def test_eval_metrics():
+    sys.path.insert(0, str(ROOT / "eval"))
+    from metrics import match, summarize
+    c = match([[0, 0, 100, 100], [500, 500, 600, 600]], [[0, 0, 110, 110]])
+    assert (c["tp"], c["fp"], c["fn"]) == (1, 1, 0)
+    s = summarize([c, match([], [[0, 0, 10, 10]])])
+    assert s["precision"] == 0.5 and abs(s["recall"] - 0.5) < 1e-9

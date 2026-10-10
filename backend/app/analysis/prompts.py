@@ -1,4 +1,5 @@
 """PERSON 2 owns this file. Prompt from the project brief, mapped to the English contract."""
+from typing import Optional
 
 LANGUAGES = {"en": "English", "lt": "Lithuanian"}
 
@@ -15,6 +16,8 @@ WORKFLOW:
 2. Grid scan: split Image B into a 4x4 grid and systematically compare every cell with the same cell in Image A.
 3. Apply criteria: report ONLY changes that match the analysis criteria. Ignore all other changes.
 4. Reject false positives: a change is NOT real if it is explained by clouds, cloud shadows, a different sun angle, residual camera angle or alignment offset (edges, black borders), sun glint, or wind moving vegetation.
+
+Pure black areas in Image B are outside the camera coverage after alignment. They are NOT changes: never report them and never place a box on them.
 
 OUTPUT RULES:
 - Return JSON matching the response schema.
@@ -36,6 +39,35 @@ FEW_SHOT = """REFERENCE EXAMPLES:
 """
 
 
-def build_prompt(criteria: str, lang: str = "en") -> str:
+HINTS_PROMPT = """CANDIDATE REGIONS from an automatic pixel-difference detector, as [ymin, xmin, ymax, xmax] (0-1000):
+{regions}
+The detector is not intelligent: it also fires on shadows, lighting and alignment errors, and it can miss changes.
+Check every candidate: report it only if it is a real change that matches the criteria (tighten the box if needed).
+Then still scan the rest of the image for matching changes the detector missed.
+"""
+
+MAX_HINTS = 15
+
+VERIFY_PROMPT = """You are a senior IMINT analyst double-checking a junior analyst's detections.
+For each numbered candidate you get two crops of the SAME ground area: from Image A (past) and from Image B (present).
+Operator criteria: {criteria}
+
+For every candidate decide:
+- "real": true only if there is a real physical change between the crops (not shadow, sun angle, lighting, blur, alignment offset or black border).
+- "matches_criteria": true only if that change fits the operator criteria.
+- "reason": one short sentence.
+Return one verdict per candidate, using its number as "index".
+"""
+
+
+def build_prompt(criteria: str, lang: str = "en", hints: Optional[list[list[int]]] = None) -> str:
     language = LANGUAGES.get(lang, "English")
-    return SYSTEM_PROMPT.format(criteria=criteria.strip(), language=language) + "\n" + FEW_SHOT
+    prompt = SYSTEM_PROMPT.format(criteria=criteria.strip(), language=language) + "\n" + FEW_SHOT
+    if hints:
+        regions = "\n".join(f"{i}. {list(map(int, box))}" for i, box in enumerate(hints[:MAX_HINTS], 1))
+        prompt += "\n" + HINTS_PROMPT.format(regions=regions)
+    return prompt
+
+
+def build_verify_prompt(criteria: str) -> str:
+    return VERIFY_PROMPT.format(criteria=criteria.strip())

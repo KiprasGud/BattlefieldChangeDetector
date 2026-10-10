@@ -1,0 +1,40 @@
+{
+  "summary": {
+    "en": "Fresh activity along the forward road: new vehicle tracks branch off toward the treeline and one new crater appeared in the open field.",
+    "lt": "Prie priekinio kelio užfiksuota nauja veikla: naujos transporto vėžės suka link miško linijos, atvirame lauke atsirado nauja duobė."
+  },
+  "recommendation": {
+    "en": "Send a reconnaissance drone at low altitude along the new tracks to the treeline (sector D1) to confirm vehicle presence.",
+    "lt": "Siųsti žvalgybinį droną žemu aukščiu palei naujas vėžes iki miško linijos (sektorius D1) transporto buvimui patvirtinti."
+  },
+  "changes": [
+    {
+      "tags": ["tracks", "vehicle"],
+      "confidence": "high",
+      "box": [170, 612, 327, 896],
+      "type": {"en": "vehicle tracks", "lt": "transporto vėžės"},
+      "description": {
+        "en": "Two parallel dark lines leave the road and run toward the treeline; absent in the baseline image.",
+        "lt": "Dvi lygiagrečios tamsios linijos atsišakoja nuo kelio link miško linijos; bazinėje nuotraukoje jų nebuvo."
+      },
+      "location_text": {
+        "en": "upper right, north of the road near the treeline",
+        "lt": "viršutinė dešinė dalis, į šiaurę nuo kelio prie miško linijos"
+      }
+    },
+    {
+      "tags": ["crater", "earthworks"],
+      "confidence": "high",
+      "box": [457, 315, 562, 399],
+      "type": {"en": "crater", "lt": "sprogimo duobė"},
+      "description": {
+        "en": "Dark circular pit with a lighter ring of ejected soil; the field was intact in the baseline.",
+        "lt": "Tamsi apvali duobė su šviesesniu išmestos žemės apvadu; bazinėje nuotraukoje laukas buvo nepažeistas."
+      },
+      "location_text": {
+        "en": "center left, just north of the road",
+        "lt": "centras kairėje, šiek tiek į šiaurę nuo kelio"
+      }
+    }
+  ]
+}
