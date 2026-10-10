@@ -9,5 +9,6 @@ pillow
 google-genai>=2.29
 watchdog
 imageio-ffmpeg
+fpdf2>=2.7
 pytest
 httpx

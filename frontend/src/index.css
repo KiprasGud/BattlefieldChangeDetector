@@ -636,6 +636,38 @@ body.theme-light {
   border-style: dashed;
 }
 
+/* Review: pairs view (every inbox epoch pair; batched ones stay listed) */
+.pair-row {
+  align-items: center;
+  gap: 8px;
+}
+
+.pair-row:not(.batched) {
+  border-style: dashed;
+}
+
+.badge.batched {
+  color: var(--accent-exec);
+  border: var(--border-width) solid var(--accent-exec);
+  padding: 0 4px;
+}
+
+.pair-batch {
+  background: transparent;
+  border: var(--border-width) solid var(--text-main);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: var(--fs-data);
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.pair-batch:hover, .pair-batch:focus {
+  background: var(--accent-active);
+  color: var(--accent-active-text);
+  outline: none;
+}
+
 /* Review: in-app verified change report */
 .report-viewer {
   position: absolute;

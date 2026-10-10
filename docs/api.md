@@ -92,6 +92,15 @@ goes back to `done`, so finished reviews survive. Its files show up in the inbox
 `200 {"watching": true, "folder": "...", "scheme": "<key>_<Before|After|DayN>, ...", "waiting": ["Lone_Day1.jpg"], "paired": [...], "rejected": [{"name": "clip.mp4", "reason": "name does not follow ..."}], "groups": [{"project": "projectx", "site": "ProjectX", "files": [...], "epochs": ["Day1", "Day2", "Day5"], "batched": false}]}`
 
 `batched` is `true` when every consecutive file pair of the project is a leg (not failed) of a batch.
+`pairs` lists every consecutive file pair of those projects, batched or not (the dashboard's pairs view keeps them all):
+`[{"project", "site", "name_a", "name_b", "tag_a", "tag_b", "batched"}]`, `batched` by the same rule, per pair.
+
+### POST /api/inbox/batch
+Body `{"name_a": "ProjectX_Day1.jpg", "name_b": "ProjectX_Day2.jpg"}`: batch that one inbox pair by hand and run it now,
+also while automatic batching is stopped (it skips the paused worker; queued automatic batches still wait). The pair
+becomes a leg of the project's batch, as automatic batching would add it.
+`200 {"batch_id": "...", "started": true}`; `started` is `false` (`batch_id` `null`) when the project's batch is already
+running (it picks the leg up) or the pair was batched before. `404` watcher off or not a consecutive inbox pair.
 
 ### GET /api/batches?limit=50
 Most recent first, one row per project batch: `[{"id", "site", "project", "legs_count", "name_a", "name_b", "tag_a", "tag_b", "kind_a", "kind_b", "ai_enabled", "status", "stage", "progress", "frames_a", "frames_b", "matched_pairs", "pairs_count", "timings", "warnings", "error_message", "findings_count", "pending_count", "accepted_count", "rejected_count", ...}]`
@@ -113,9 +122,11 @@ as a new batch: `200 {"batch_id": "...", "status": "queued"}`. `404` unknown bat
 ### POST /api/findings/{id}/review
 Body `{"status": "accepted" | "rejected" | "pending"}` → the updated finding. `404` unknown finding, `422` other status.
 
-### GET /api/batches/{id}/report?format=json|html
+### GET /api/batches/{id}/report?format=json|html|pdf
 Download (`Content-Disposition: attachment`) of the verified change report: accepted findings only, with per-category
 totals. `html` is one self-contained page (annotated frames and before/after crops embedded), printable to PDF.
+`pdf` (A4, fpdf2) shows each pair's A and aligned B side by side with the boxes drawn on both, then its findings grouped
+by category with before/after crops.
 The JSON lists the `legs`; each verified change carries its `leg` and `leg_label`. The review dashboard also shows
 this report in place (`[V]`), from the batch detail, without a download.
 

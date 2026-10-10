@@ -140,6 +140,20 @@ class Watcher:
             created += self._queue(group, enqueue)
         return created
 
+    def batch_pair(self, name_a: str, name_b: str, enqueue: bool = True) -> Optional[str]:
+        """Batch one consecutive pair of the inbox by hand and run it now, even while automatic batching is off.
+        Returns the batch id it started, None when that batch is already running. KeyError: no such inbox pair."""
+        group = next((g for g in self.inbox.groups() if name_a in {m.path.name for m in g}), None)
+        if group is None:
+            raise KeyError((name_a, name_b))
+        hashes = {m.path: self._hash(m.path) for m in group}
+        batch_id = batch.queue_pair(group, hashes, name_a, name_b)
+        if batch_id:
+            log.info("Batched by hand %s: %s -> %s", batch_id, name_a, name_b)
+            if enqueue:
+                batch.worker.run_now(batch_id)
+        return batch_id
+
     def _queue(self, group: list, enqueue: bool) -> list[str]:
         if len(group) < 2:
             return []

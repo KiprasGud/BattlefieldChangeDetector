@@ -117,6 +117,10 @@ def test_review_and_report(batch_env):
     page = client.get(f"/api/batches/{d['id']}/report?format=html")
     assert page.status_code == 200 and "VERIFIED CHANGE REPORT" in page.text
     assert page.text.count("data:image/jpeg;base64,") == 3  # annotated frame + before/after crop
+    pdf = client.get(f"/api/batches/{d['id']}/report?format=pdf")
+    assert pdf.status_code == 200 and pdf.headers["content-type"] == "application/pdf"
+    assert pdf.content.startswith(b"%PDF") and len(pdf.content) > 20_000  # four frames + two crops embedded
+    assert ".pdf" in pdf.headers["content-disposition"]
     assert client.get("/api/batches/nope").status_code == 404
 
 
@@ -341,6 +345,53 @@ def test_clear_queue_only_when_stopped_and_keeps_finished_legs(batch_env, monkey
     assert [g["batched"] for g in client.get("/api/inbox").json()["groups"]] == [False, False]
     batch.process_batch(y)  # a cleared id still in the worker's queue is skipped
     assert store.get_batch(y) is None
+
+
+def test_inbox_pairs_stay_listed_and_one_can_be_batched_by_hand(batch_env, monkeypatch):
+    inbox, submitted = batch_env
+    settings.set_ai_enabled(False)
+    started: list[str] = []
+    monkeypatch.setattr(batch.worker, "run_now", started.append)
+    _drop_days(inbox, "ProjectX", {1: "a", 2: "b", 3: "a"})
+    w = watcher.Watcher(inbox)
+    monkeypatch.setattr(watcher, "_service", w)
+    client.put("/api/settings", json={"auto_batch": False})
+    assert _register(w, inbox, "ProjectX_Day1.jpg", "ProjectX_Day2.jpg", "ProjectX_Day3.jpg") == []
+    pairs = client.get("/api/inbox").json()["pairs"]
+    assert [(p["tag_a"], p["tag_b"], p["batched"]) for p in pairs] == [("Day1", "Day2", False), ("Day2", "Day3", False)]
+
+    r = client.post("/api/inbox/batch", json={"name_a": "ProjectX_Day2.jpg", "name_b": "ProjectX_Day3.jpg"})
+    assert r.status_code == 200 and r.json()["started"] and started == [r.json()["batch_id"]] and submitted == []
+    legs = store.list_legs(started[0])
+    assert [(leg["tag_a"], leg["tag_b"]) for leg in legs] == [("Day2", "Day3")]
+    pairs = client.get("/api/inbox").json()["pairs"]
+    assert [p["batched"] for p in pairs] == [False, True]  # the batched pair stays listed
+
+    batch.process_batch(started[0])
+    r = client.post("/api/inbox/batch", json={"name_a": "ProjectX_Day1.jpg", "name_b": "ProjectX_Day2.jpg"})
+    assert r.json()["batch_id"] == started[0]  # same project batch, re-opened with the new leg
+    assert [p["batched"] for p in client.get("/api/inbox").json()["pairs"]] == [True, True]
+    assert client.post("/api/inbox/batch", json={"name_a": "ProjectX_Day1.jpg",
+                                                 "name_b": "ProjectX_Day3.jpg"}).status_code == 404  # not consecutive
+    assert client.post("/api/inbox/batch", json={"name_a": "nope.jpg", "name_b": "x.jpg"}).status_code == 404
+
+
+def test_run_now_skips_the_pause(monkeypatch):
+    import threading
+
+    ran: list[str] = []
+    done = threading.Event()
+    monkeypatch.setattr(batch, "process_batch", lambda batch_id: (ran.append(batch_id), done.set()))
+    w = batch.BatchWorker()
+    w.pause()
+    w.submit("auto1")
+    w.run_now("manual1")
+    assert done.wait(5)
+    time.sleep(0.3)
+    assert ran == ["manual1"]  # the submitted batch still waits for resume
+    done.clear()
+    w.resume()
+    assert done.wait(5) and ran == ["manual1", "auto1"]
 
 
 def test_paused_worker_holds_queued_batches(monkeypatch):

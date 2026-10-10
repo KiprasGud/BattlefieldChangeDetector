@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  batchPair,
   clearQueue,
   fetchBatch,
   fetchBatches,
@@ -12,8 +13,10 @@ import {
   type Batch,
   type BatchDetail,
   type FramePair,
+  type InboxPair,
   type InboxState,
   type PipelineSettings,
+  type ReportFormat,
   type ReviewStatus,
 } from "../api";
 import { CATEGORY_LABELS, CATEGORY_ORDER, type AlignMethod, type AnalyzeResponse } from "../types";
@@ -53,6 +56,8 @@ function pairResponse(batch: BatchDetail, pair: FramePair): AnalyzeResponse {
   };
 }
 
+const pairKey = (p: InboxPair) => `${p.name_a}|${p.name_b}`;
+
 function batchState(b: Batch): { text: string; cls: string } {
   if (b.status === "done") return { text: "DONE", cls: "text-success" };
   if (b.status === "error") return { text: "ERROR", cls: "text-danger" };
@@ -75,6 +80,8 @@ export default function ReviewDashboard({ onExit }: Props) {
   const [statusLine, setStatusLine] = useState("[SYS] Review terminal online.");
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
+  // Pairs batched by hand that the inbox poll does not show as batched yet.
+  const [pendingPairs, setPendingPairs] = useState<Set<string>>(() => new Set());
 
   const refresh = useCallback(async () => {
     try {
@@ -98,6 +105,16 @@ export default function ReviewDashboard({ onExit }: Props) {
   useEffect(() => {
     if (!selectedId && batches.length) setSelectedId(batches[0].id);
   }, [batches, selectedId]);
+
+  // A pending pair is settled once the poll reports it batched (or it left the inbox).
+  useEffect(() => {
+    if (!inbox || !pendingPairs.size) return;
+    const open = new Set(inbox.pairs.filter((p) => !p.batched).map(pairKey));
+    setPendingPairs((prev) => {
+      const next = new Set([...prev].filter((k) => open.has(k)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [inbox]);
 
   // Reload the selected batch when it is picked or its row changes (stage, progress, finish).
   const row = batches.find((b) => b.id === selectedId) ?? null;
@@ -205,6 +222,28 @@ export default function ReviewDashboard({ onExit }: Props) {
     }
   };
 
+  const batchOnePair = async (p: InboxPair) => {
+    const key = pairKey(p);
+    setPendingPairs((prev) => new Set(prev).add(key));
+    try {
+      const r = await batchPair(p.name_a, p.name_b);
+      setStatusLine(
+        r.started
+          ? `[EXEC] PAIR ${p.site} ${p.tag_a} → ${p.tag_b} BATCHED BY HAND AS ${r.batch_id}: RUNNING NOW.`
+          : `[SYS] PAIR ${p.site} ${p.tag_a} → ${p.tag_b} ADDED TO ITS RUNNING BATCH.`
+      );
+      if (r.batch_id) setSelectedId(r.batch_id);
+      await refresh();
+    } catch (e: any) {
+      setPendingPairs((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    }
+  };
+
   const requeue = async () => {
     if (!selectedId) return;
     try {
@@ -217,7 +256,7 @@ export default function ReviewDashboard({ onExit }: Props) {
     }
   };
 
-  const exportReport = (format: "html" | "json") => {
+  const exportReport = (format: ReportFormat) => {
     if (!selectedId) return;
     const a = document.createElement("a");
     a.href = reportUrl(selectedId, format);
@@ -262,6 +301,7 @@ export default function ReviewDashboard({ onExit }: Props) {
         if (e.key === "Escape" || key === "v") setReportOpen(false);
         else if (key === "e") exportReport("html");
         else if (key === "j") exportReport("json");
+        else if (key === "p") exportReport("pdf");
         else return;
         e.preventDefault();
         return;
@@ -276,6 +316,7 @@ export default function ReviewDashboard({ onExit }: Props) {
       else if (key === "u") review("pending");
       else if (key === "e") exportReport("html");
       else if (key === "j") exportReport("json");
+      else if (key === "p") exportReport("pdf");
       else return;
       e.preventDefault();
     };
@@ -428,6 +469,38 @@ export default function ReviewDashboard({ onExit }: Props) {
                 <span>BAD NAME</span>
               </div>
             ))}
+          </div>
+
+          <div className="control-group">
+            <div className="control-label" style={{ display: "flex", justifyContent: "space-between" }}>
+              <span>PAIRS</span>
+              <span>
+                {inbox?.pairs?.filter((p) => p.batched).length ?? 0}/{inbox?.pairs?.length ?? 0} BATCHED
+              </span>
+            </div>
+            {!inbox?.pairs?.length && <div className="fs-xs mono text-dim">NO EPOCH PAIRS IN THE INBOX</div>}
+            {inbox?.pairs?.map((p) => {
+              const key = pairKey(p);
+              const pending = pendingPairs.has(key);
+              return (
+                <div className={`file-status pair-row ${p.batched ? "batched" : ""}`} key={key} title={`${p.name_a}\n${p.name_b}`}>
+                  <span>
+                    {p.site} · {p.tag_a} → {p.tag_b}
+                  </span>
+                  {p.batched ? (
+                    <span className="badge batched">BATCHED</span>
+                  ) : pending ? (
+                    <span className="text-warn">QUEUING...</span>
+                  ) : settings?.auto_batch ? (
+                    <span className="text-dim">AUTO</span>
+                  ) : (
+                    <button className="pair-batch" onClick={() => batchOnePair(p)}>
+                      BATCH
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           <div className="control-group">

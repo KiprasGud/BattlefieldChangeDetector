@@ -1,4 +1,4 @@
-import type { BatchDetail, Finding, FramePair } from "../api";
+import type { BatchDetail, Finding, FramePair, ReportFormat } from "../api";
 import { CATEGORY_LABELS, CATEGORY_ORDER } from "../types";
 
 // The verified change report, read in place: same rule as the exported one (backend render/report.py) - accepted
@@ -11,7 +11,7 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
 interface Props {
   batch: BatchDetail;
   onClose: () => void;
-  onExport: (format: "html" | "json") => void;
+  onExport: (format: ReportFormat) => void;
 }
 
 function Frame({ src, label, findings }: { src: string; label: string; findings: Finding[] }) {
@@ -60,6 +60,7 @@ export default function ReportViewer({ batch, onClose, onExport }: Props) {
       <div className="report-head">
         <div className="pane-title">VERIFIED CHANGE REPORT // {batch.site}</div>
         <div className="report-actions">
+          <button className="tactical-toggle" onClick={() => onExport("pdf")}>[P] EXPORT PDF</button>
           <button className="tactical-toggle" onClick={() => onExport("html")}>[E] EXPORT HTML</button>
           <button className="tactical-toggle" onClick={() => onExport("json")}>[J] EXPORT JSON</button>
           <button className="tactical-toggle" onClick={onClose}>[ESC] CLOSE</button>

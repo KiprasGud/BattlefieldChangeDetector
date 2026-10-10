@@ -335,6 +335,18 @@ export interface InboxState {
   paired: string[];
   rejected: { name: string; reason: string }[];
   groups: InboxGroup[];
+  pairs: InboxPair[];
+}
+
+/** One consecutive epoch pair (Day1 -> Day2) in the inbox; listed whether batched or not. */
+export interface InboxPair {
+  project: string;
+  site: string;
+  name_a: string;
+  name_b: string;
+  tag_a: string;
+  tag_b: string;
+  batched: boolean;
 }
 
 /** A project in the inbox with at least two epochs; batched when all of its legs are in a batch. */
@@ -374,6 +386,10 @@ export const updateSettings = (patch: Partial<Pick<PipelineSettings, "ai_enabled
 export const clearQueue = () =>
   sendJson<{ deleted: string[]; files: string[] }>("/api/queue/clear", "POST", undefined, "Clear queue failed");
 
+/** Batch one inbox pair by hand and run it now, also while automatic batching is stopped. */
+export const batchPair = (name_a: string, name_b: string) =>
+  sendJson<{ batch_id: string | null; started: boolean }>("/api/inbox/batch", "POST", { name_a, name_b }, "Batch failed");
+
 export const reviewFinding = (id: string, status: ReviewStatus) =>
   sendJson<Finding>(`/api/findings/${id}/review`, "POST", { status }, "Review failed");
 
@@ -382,4 +398,5 @@ export async function rerunBatch(id: string): Promise<string> {
   return data.batch_id;
 }
 
-export const reportUrl = (id: string, format: "html" | "json") => `/api/batches/${id}/report?format=${format}`;
+export type ReportFormat = "html" | "json" | "pdf";
+export const reportUrl = (id: string, format: ReportFormat) => `/api/batches/${id}/report?format=${format}`;

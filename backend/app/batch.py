@@ -9,11 +9,11 @@ Batches run one at a time on a worker thread (the CV work is CPU-bound); the wor
 import hashlib
 import logging
 import os
-import queue
 import shutil
 import threading
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -246,14 +246,20 @@ def _signature(*hashes: str) -> str:
     return hashlib.sha256(":".join(hashes).encode()).hexdigest()
 
 
-def queue_project(items: list[MediaName], hashes: dict[Path, str], ai: Optional[bool] = None) -> Optional[str]:
+def queue_project(items: list[MediaName], hashes: dict[Path, str], ai: Optional[bool] = None,
+                  only: Optional[tuple[str, str]] = None) -> Optional[str]:
     """Put a project's epochs (one site, any order) into its batch: a new batch with one leg per consecutive pair, or
     the project's existing batch with the legs it does not have yet (failed legs of the same content are retried).
-    Returns the batch id when it must be submitted to the worker: new, or finished and now re-opened."""
+    only=(name_a, name_b) adds just that consecutive pair. Returns the batch id when it must be submitted to the
+    worker: new, or finished and now re-opened."""
     legs = pairs_for(items)
     if not legs:
         return None
     first, last = legs[0][0], legs[-1][1]
+    if only is not None:
+        legs = [(a, b) for a, b in legs if (a.path.name, b.path.name) == only]
+        if not legs:
+            raise KeyError(only)
     use_ai = ai_enabled() if ai is None else ai
     with _lock:
         row = store.find_project_batch(first.site)
@@ -294,6 +300,14 @@ def queue_project(items: list[MediaName], hashes: dict[Path, str], ai: Optional[
         return None
 
 
+def queue_pair(items: list[MediaName], hashes: dict[Path, str], name_a: str, name_b: str) -> Optional[str]:
+    """Batch one consecutive pair of a project by hand (see queue_project). Returns the project's batch id when it is
+    queued and must be run, None when it is already running and picks the leg up itself."""
+    queue_project(items, hashes, only=(name_a, name_b))
+    row = store.find_project_batch(items[0].site)
+    return row["id"] if row and row["status"] == "queued" else None
+
+
 def rerun_batch(batch_id: str) -> str:
     """Queue the same sources (every leg) again with the current settings, e.g. AI switched on after a CV-only run."""
     row = store.get_batch(batch_id)
@@ -328,40 +342,57 @@ def clear_queue() -> dict:
 
 class BatchWorker:
     """Runs queued batches one at a time on a daemon thread, started on first use. While paused, the batch already
-    running finishes and the next one waits."""
+    running finishes and the next submitted one waits; a batch started by hand (run_now) runs anyway, first."""
 
     def __init__(self):
-        self._queue: "queue.Queue[str]" = queue.Queue()
-        self._lock = threading.Lock()
+        self._auto: deque[str] = deque()
+        self._manual: deque[str] = deque()
+        self._cond = threading.Condition()
         self._thread: Optional[threading.Thread] = None
-        self._running = threading.Event()
-        self._running.set()
+        self._paused = False
 
     @property
     def paused(self) -> bool:
-        return not self._running.is_set()
+        return self._paused
 
     def pause(self) -> None:
-        self._running.clear()
+        with self._cond:
+            self._paused = True
 
     def resume(self) -> None:
-        self._running.set()
+        with self._cond:
+            self._paused = False
+            self._cond.notify_all()
 
     def submit(self, batch_id: str) -> None:
-        self._queue.put(batch_id)
-        with self._lock:
-            if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(target=self._run, name="batch-worker", daemon=True)
-                self._thread.start()
+        with self._cond:
+            self._auto.append(batch_id)
+            self._start()
+
+    def run_now(self, batch_id: str) -> None:
+        """Run this batch next even while paused (a pair batched by hand with automatic batching off)."""
+        with self._cond:
+            if batch_id in self._auto:
+                self._auto.remove(batch_id)
+            if batch_id not in self._manual:
+                self._manual.append(batch_id)
+            self._start()
+
+    def _start(self) -> None:  # with self._cond held
+        self._cond.notify_all()
+        if self._thread is None or not self._thread.is_alive():
+            self._thread = threading.Thread(target=self._run, name="batch-worker", daemon=True)
+            self._thread.start()
 
     def _run(self) -> None:
         while True:
-            batch_id = self._queue.get()
+            with self._cond:
+                self._cond.wait_for(lambda: self._manual or (self._auto and not self._paused))
+                batch_id = (self._manual or self._auto).popleft()
             try:
-                self._running.wait()
                 process_batch(batch_id)
-            finally:
-                self._queue.task_done()
+            except Exception:
+                log.exception("Batch worker failed on %s", batch_id)
 
 
 worker = BatchWorker()

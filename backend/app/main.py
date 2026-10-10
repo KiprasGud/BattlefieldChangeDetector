@@ -13,7 +13,7 @@ load_dotenv()
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse  # noqa: E402
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
@@ -328,15 +328,46 @@ def _inbox_groups(svc) -> list[dict[str, Any]]:
     return groups
 
 
+def _inbox_pairs(svc) -> list[dict[str, Any]]:
+    """Every consecutive epoch pair in the inbox, batched or not: the pairs view keeps them all."""
+    legs = batch_store.project_legs()
+    return [
+        {"project": a.site, "site": a.key, "name_a": a.path.name, "name_b": b.path.name, "tag_a": a.tag,
+         "tag_b": b.tag, "batched": (a.path.name, b.path.name) in legs.get(a.site, set())}
+        for group in svc.inbox.groups() for a, b in zip(group, group[1:])
+    ]
+
+
 @app.get("/api/inbox")
 def get_inbox():
-    """Files in the watch folder waiting for a partner, projects (batched or not), and names that do not follow the
-    scheme."""
+    """Files in the watch folder waiting for a partner, projects (batched or not), their consecutive pairs, and names
+    that do not follow the scheme."""
     svc = watcher.service()
     snapshot = svc.inbox.snapshot() if svc else {"waiting": [], "paired": [], "rejected": []}
     groups = _inbox_groups(svc) if svc else []
+    pairs = _inbox_pairs(svc) if svc else []
     return {"watching": svc is not None, "folder": _settings()["watch_dir"], "scheme": SCHEME, "groups": groups,
-            **snapshot}
+            "pairs": pairs, **snapshot}
+
+
+class PairBatch(BaseModel):
+    name_a: str
+    name_b: str
+
+
+@app.post("/api/inbox/batch")
+def batch_inbox_pair(pair: PairBatch):
+    """Batch one inbox pair by hand and run it now, also while automatic batching is stopped."""
+    svc = watcher.service()
+    if svc is None:
+        raise HTTPException(status_code=404, detail="The watch folder is off.")
+    try:
+        batch_id = svc.batch_pair(pair.name_a, pair.name_b)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No such pair in the inbox.")
+    except OSError as e:
+        raise HTTPException(status_code=409, detail=f"Cannot read the files: {e}")
+    return {"batch_id": batch_id, "started": batch_id is not None}  # not started: its batch is running or done
 
 
 @app.get("/api/batches")
@@ -375,7 +406,7 @@ def review_finding(finding_id: str, update: ReviewUpdate):
 
 
 @app.get("/api/batches/{batch_id}/report")
-def batch_report(batch_id: str, fmt: Literal["json", "html"] = Query("json", alias="format")):
+def batch_report(batch_id: str, fmt: Literal["json", "html", "pdf"] = Query("json", alias="format")):
     """Final report of the verified (accepted) findings, as a download."""
     detail = batch_store.batch_detail(batch_id)
     if detail is None:
@@ -383,4 +414,7 @@ def batch_report(batch_id: str, fmt: Literal["json", "html"] = Query("json", ali
     headers = {"Content-Disposition": f'attachment; filename="zvalgas_report_{batch_id}.{fmt}"'}
     if fmt == "html":
         return HTMLResponse(report.build_html(detail, batch.BATCH_DIR / batch_id), headers=headers)
+    if fmt == "pdf":
+        return Response(report.build_pdf(detail, batch.BATCH_DIR / batch_id), media_type="application/pdf",
+                        headers=headers)
     return JSONResponse(report.build_json(detail), headers=headers)
