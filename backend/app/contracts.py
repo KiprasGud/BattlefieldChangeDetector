@@ -1,0 +1,43 @@
+"""FROZEN shared contracts. Change only via a small PR announced to the team.
+
+Box convention: [ymin, xmin, ymax, xmax], normalized 0-1000, origin top-left of image A frame.
+"""
+from typing import Literal, Optional
+
+import numpy as np
+from pydantic import BaseModel, ConfigDict, Field
+
+Confidence = Literal["high", "medium", "low"]
+
+
+class Change(BaseModel):
+    type: str                       # e.g. "crater", "tracks", "fallen tree"
+    description: str                # what exactly changed
+    location_text: str              # e.g. "upper right, near road junction"
+    confidence: Confidence
+    box: list[int] = Field(min_length=4, max_length=4)  # [ymin, xmin, ymax, xmax] 0-1000
+    sector: Optional[str] = None    # grid label, e.g. "B4"
+
+
+class AnalysisResult(BaseModel):
+    report_date: str                # YYYY-MM-DD
+    summary: str                    # 2-sentence situation assessment
+    changes: list[Change]
+    recommendation: str
+
+
+class AlignResult(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    aligned_b: np.ndarray           # image B warped into A's frame (BGR uint8, same size as A)
+    homography: Optional[list[list[float]]] = None  # 3x3, None if unavailable
+    quality: float = 0.0            # 0-1 (e.g. inlier ratio)
+    ok: bool = True                 # False -> pipeline warns, continues unaligned
+
+
+class AnalyzeResponse(BaseModel):
+    job_id: str
+    result: AnalysisResult
+    align_quality: float
+    align_ok: bool
+    images: dict[str, str]          # {"aligned_b_url": ..., "annotated_url": ...}

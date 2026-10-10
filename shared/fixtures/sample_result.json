@@ -1,0 +1,23 @@
+{
+  "report_date": "2026-10-10",
+  "summary": "Elevated activity in the eastern half of the sector. New vehicle tracks and two probable craters detected.",
+  "changes": [
+    {
+      "type": "vehicle tracks",
+      "description": "New brown line across grass, absent in image A, leading toward the treeline.",
+      "location_text": "upper right, near road junction",
+      "confidence": "high",
+      "box": [120, 600, 320, 900],
+      "sector": "B4"
+    },
+    {
+      "type": "crater",
+      "description": "Dark circle with lighter ejected-soil ring.",
+      "location_text": "center, left of the road",
+      "confidence": "medium",
+      "box": [450, 300, 560, 420],
+      "sector": "C2"
+    }
+  ],
+  "recommendation": "Send a reconnaissance drone for close-range confirmation of sector B4."
+}
