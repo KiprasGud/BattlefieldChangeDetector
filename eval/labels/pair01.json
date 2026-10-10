@@ -1,0 +1,11 @@
+{
+  "pair": "pair01",
+  "image_a": "shared/sample_data/pair01/a.jpg",
+  "image_b": "shared/sample_data/pair01/b.jpg",
+  "cases": [
+    {"criteria": "New vehicle tracks", "boxes": [[180, 622, 317, 886]]},
+    {"criteria": "Craters / digging", "boxes": [[467, 325, 552, 389]]},
+    {"criteria": "New vehicle tracks, craters / digging", "boxes": [[180, 622, 317, 886], [467, 325, 552, 389]]},
+    {"criteria": "Felled trees / clearing", "boxes": []}
+  ]
+}

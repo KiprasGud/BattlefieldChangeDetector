@@ -1,0 +1,40 @@
+{
+  "summary": {
+    "en": "The checkpoint structure at the road junction was hit: a breach is visible in the roof. A new dark linear feature crosses the field south of the road.",
+    "lt": "Pastatas prie kelio sankryžos buvo pataikytas: stoge matoma pramuša. Į pietus nuo kelio per lauką eina naujas tamsus linijinis objektas."
+  },
+  "recommendation": {
+    "en": "Task a close-range drone to assess damage to the structure (sector C2) and identify the linear feature in sectors A3-B3.",
+    "lt": "Siųsti droną artimu atstumu įvertinti pastato pažeidimus (sektorius C2) ir identifikuoti linijinį objektą sektoriuose A3-B3."
+  },
+  "changes": [
+    {
+      "tags": ["crater", "structure"],
+      "confidence": "high",
+      "box": [422, 464, 547, 562],
+      "type": {"en": "roof breach / impact", "lt": "stogo pramuša / pataikymas"},
+      "description": {
+        "en": "Dark circular hole in the roof of the structure, not present in the baseline image.",
+        "lt": "Tamsi apvali skylė pastato stoge, kurios bazinėje nuotraukoje nebuvo."
+      },
+      "location_text": {
+        "en": "center, on the building at the road junction",
+        "lt": "centras, ant pastato prie kelio sankryžos"
+      }
+    },
+    {
+      "tags": ["tree", "cable", "earthworks"],
+      "confidence": "medium",
+      "box": [702, 136, 783, 490],
+      "type": {"en": "felled tree / linear feature", "lt": "nuvirtęs medis / linijinis objektas"},
+      "description": {
+        "en": "New dark bent line across the grass south of the road; consistent with a felled trunk, possibly a trench or cable.",
+        "lt": "Nauja tamsi lenkta linija per žolę į pietus nuo kelio; panašu į nuvirtusį kamieną, galimai apkasas ar kabelis."
+      },
+      "location_text": {
+        "en": "lower left, south of the road",
+        "lt": "apatinė kairė dalis, į pietus nuo kelio"
+      }
+    }
+  ]
+}

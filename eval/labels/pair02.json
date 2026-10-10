@@ -1,0 +1,10 @@
+{
+  "pair": "pair02",
+  "image_a": "shared/sample_data/pair02/a.jpg",
+  "image_b": "shared/sample_data/pair02/b.jpg",
+  "cases": [
+    {"criteria": "Barrier breaches / impacts on structures", "boxes": [[432, 474, 537, 552]]},
+    {"criteria": "Felled trees", "boxes": [[712, 146, 773, 480]]},
+    {"criteria": "Vehicle activity, barrier breaches, felled trees", "boxes": [[432, 474, 537, 552], [712, 146, 773, 480]]}
+  ]
+}

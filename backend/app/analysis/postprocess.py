@@ -2,9 +2,13 @@
 from datetime import date
 from typing import Optional
 
+import numpy as np
+
 from ..contracts import AnalysisResult, Change
 
 MIN_SIDE = 5  # boxes thinner than this (in 0-1000 units) are dropped
+BLACK_LEVEL = 3  # pixel max channel <= this counts as warp border
+MAX_UNCOVERED = 0.6  # drop boxes with more than 60% of their area in the black border
 
 CONFIDENCE_MAP = {
     "high": "high", "medium": "medium", "low": "low",
@@ -41,14 +45,35 @@ def normalize_confidence(value) -> str:
     return CONFIDENCE_MAP.get(str(value).strip().lower(), "low")
 
 
-def to_result(raw: dict) -> AnalysisResult:
-    """raw = parsed LLM JSON (dict). Malformed changes are dropped, never raised."""
+def coverage_mask(img: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    """True where image B has real pixels. Pure black = outside camera coverage after the warp.
+    None when the image is (almost) all black, e.g. synthetic test input: then nothing is filtered."""
+    if img is None or img.size == 0:
+        return None
+    mask = (img.max(axis=2) if img.ndim == 3 else img) > BLACK_LEVEL
+    return mask if mask.mean() >= 0.05 else None
+
+
+def mostly_uncovered(box: list[int], mask: Optional[np.ndarray]) -> bool:
+    if mask is None:
+        return False
+    h, w = mask.shape
+    y0, x0 = int(box[0] / 1000 * h), int(box[1] / 1000 * w)
+    y1, x1 = max(int(box[2] / 1000 * h), y0 + 1), max(int(box[3] / 1000 * w), x0 + 1)
+    region = mask[y0:y1, x0:x1]
+    return region.size > 0 and region.mean() < 1 - MAX_UNCOVERED
+
+
+def to_result(raw: dict, image_b: Optional[np.ndarray] = None) -> AnalysisResult:
+    """raw = parsed LLM JSON (dict). Malformed changes are dropped, never raised.
+    With image_b, boxes lying mostly in black warp borders are dropped too."""
+    mask = coverage_mask(image_b)
     changes = []
     for c in raw.get("changes") or []:
         if not isinstance(c, dict):
             continue
         box = clean_box(c.get("box"))
-        if box is None:
+        if box is None or mostly_uncovered(box, mask):
             continue
         changes.append(Change(
             type=str(c.get("type") or "unknown"),
