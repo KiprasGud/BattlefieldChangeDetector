@@ -12,11 +12,13 @@
    │      both images at a 1200 px working size → dense SIFT (also on mirrored B) → ratio test
    │      → MAGSAC homography → sanity check in a resolution-normalized frame → ECC fallback
    │
-   ├─2─ change_heatmap(A*, B', mask) → heatmap + candidate boxes (diff/)      [P1]
+   ├─2─ change_heatmap(A*, B', mask) → heatmap image for the HEATMAP view only (diff/)  [P1]
    │      A* = A blurred to B's resolution when B is coarser (harmonize_resolution), else A
    │
-   ├─3─ analyze(A, B', criteria, hints, aligned) → AnalysisResult (analysis/) [P2]
+   ├─3─ analyze(A, B', criteria, aligned) → AnalysisResult (analysis/)      [P2]
+   │      criteria = presets.build_criteria(preset ids, free-text query): one written instruction block
    │      Gemini 3.5 Flash-Lite, IMINT prompt + few-shot, JSON-schema output, boxes 0-1000
+   │      AI off: no detections (OpenCV only aligns), warning "AI step disabled"
    │
    └─4─ annotate(B', result) → red boxes                        (render/)     [P3]
    ▼
@@ -77,7 +79,9 @@ results (NMS), rendering, cache, offline fallback.
 
 Gemini (`gemini-3.5-flash-lite`, `backend/app/analysis/`) does exactly two things:
 1. **Detection**: compares A with aligned B against the operator's criteria, returns typed changes with boxes, a
-   2-sentence summary and a recommendation. Heatmap candidates are passed as hints to confirm or reject.
+   2-sentence summary and a recommendation. Pre-made target classes (`analysis/presets.py`) and the free-text
+   query reach the model as one criteria block. Only the batch path passes heatmap candidates as hints; the
+   single-pair `/api/analyze` flow sends none, so every detection there is the model's own.
 2. **Verification** (`ANALYSIS_VERIFY=1`): sees A/B crops of each detection and rejects shadows, lighting,
    alignment artifacts and off-criteria changes. A failed verification keeps the detections.
 
