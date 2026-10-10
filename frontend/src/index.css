@@ -317,3 +317,27 @@ body {
   90% { opacity: 1; }
   100% { transform: translateY(380px); opacity: 0; }
 }
+
+/* ========================
+   PRINT: Operator Briefing
+   ======================== */
+@media print {
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  /* Hide entire app except the print-only block */
+  .app-container,
+  header,
+  footer {
+    display: none !important;
+  }
+
+  #print-report {
+    display: block !important;
+    font-family: Arial, sans-serif;
+    color: #000;
+  }
+}
+

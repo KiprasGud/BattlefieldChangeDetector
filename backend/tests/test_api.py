@@ -1,3 +1,4 @@
+import time
 import cv2
 import numpy as np
 from fastapi.testclient import TestClient
@@ -16,9 +17,46 @@ def test_health():
     assert client.get("/api/health").json() == {"status": "ok"}
 
 
-def test_analyze_stub():
+def test_analyze_async_job_flow():
+    # 1. Post analysis job
     r = client.post(
         "/api/analyze",
+        files={"image_a": ("a.jpg", _jpg(), "image/jpeg"), "image_b": ("b.jpg", _jpg(), "image/jpeg")},
+        data={"criteria": "new tracks", "draw_grid": "true"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert "job_id" in body
+    job_id = body["job_id"]
+    assert body["status"] in ("queued", "running", "done")
+
+    # 2. Poll job status until done (timeout 10s)
+    deadline = time.time() + 10.0
+    completed_job = None
+    while time.time() < deadline:
+        res = client.get(f"/api/jobs/{job_id}")
+        assert res.status_code == 200
+        data = res.json()
+        if data["status"] in ("done", "error"):
+            completed_job = data
+            break
+        time.sleep(0.05)
+
+    assert completed_job is not None, "Job did not complete within timeout"
+    assert completed_job["status"] == "done"
+    assert completed_job["stage"] == "done"
+    assert completed_job["result"]["changes"]
+    assert completed_job["images"]["annotated_url"].startswith("/api/files/")
+    assert completed_job["images"]["aligned_b_url"].startswith("/api/files/")
+    assert completed_job["images"]["image_a_url"].startswith("/api/files/")
+    assert "align" in completed_job["timings"]
+    assert "ai" in completed_job["timings"]
+    assert "render" in completed_job["timings"]
+
+
+def test_analyze_sync_mode():
+    r = client.post(
+        "/api/analyze?sync=true",
         files={"image_a": ("a.jpg", _jpg(), "image/jpeg"), "image_b": ("b.jpg", _jpg(), "image/jpeg")},
         data={"criteria": "new tracks"},
     )
@@ -26,18 +64,24 @@ def test_analyze_stub():
     body = r.json()
     assert body["result"]["changes"]
     assert body["images"]["annotated_url"].startswith("/api/files/")
-    assert body["images"]["aligned_b_url"].startswith("/api/files/")
-    assert body["images"]["image_a_url"].startswith("/api/files/")
+    assert "total" in body["timings"]
 
 
-def test_analyze_with_grid():
-    r = client.post(
-        "/api/analyze",
-        files={"image_a": ("a.jpg", _jpg(), "image/jpeg"), "image_b": ("b.jpg", _jpg(), "image/jpeg")},
-        data={"criteria": "new tracks", "draw_grid": "true"},
-    )
+def test_get_jobs_history():
+    r = client.get("/api/jobs")
     assert r.status_code == 200
-    assert r.json()["images"]["annotated_url"]
+    jobs = r.json()
+    assert isinstance(jobs, list)
+    assert len(jobs) >= 1
+    first_job = jobs[0]
+    assert "job_id" in first_job
+    assert "status" in first_job
+    assert "criteria" in first_job
+
+
+def test_get_job_not_found():
+    r = client.get("/api/jobs/nonexistent-id")
+    assert r.status_code == 404
 
 
 def test_analyze_empty_criteria_error():
@@ -60,9 +104,9 @@ def test_analyze_invalid_lang_error():
     assert "language" in r.text.lower()
 
 
-def test_analyze_corrupt_image_error():
+def test_analyze_corrupt_image_sync_error():
     r = client.post(
-        "/api/analyze",
+        "/api/analyze?sync=true",
         files={"image_a": ("a.jpg", b"not-an-image", "image/jpeg"), "image_b": ("b.jpg", _jpg(), "image/jpeg")},
         data={"criteria": "tracks"},
     )

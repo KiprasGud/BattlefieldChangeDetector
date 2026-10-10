@@ -8,6 +8,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
 Confidence = Literal["high", "medium", "low"]
+AlignMethod = Literal["sift", "ecc", "none"]
 
 
 class Change(BaseModel):
@@ -33,6 +34,8 @@ class AlignResult(BaseModel):
     homography: Optional[list[list[float]]] = None  # 3x3, None if unavailable
     quality: float = 0.0            # 0-1 (e.g. inlier ratio)
     ok: bool = True                 # False -> pipeline warns, continues unaligned
+    method: AlignMethod = "none"    # "sift", "ecc", or "none"
+    valid_mask: Optional[np.ndarray] = None  # uint8 255 = valid pixels of warped B
 
 
 class AnalyzeResponse(BaseModel):
@@ -40,4 +43,6 @@ class AnalyzeResponse(BaseModel):
     result: AnalysisResult
     align_quality: float
     align_ok: bool
-    images: dict[str, str]          # {"aligned_b_url": ..., "annotated_url": ...}
+    images: dict[str, str]          # {"aligned_b_url": ..., "annotated_url": ..., "image_a_url": ..., "heatmap_url": ...}
+    timings: dict[str, float] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
