@@ -415,7 +415,7 @@ export default function App() {
           {loading ? (
             <div className="wireframe-placeholder">
               <div>PROCESSING...</div>
-              <div className="fs-xs mono">STAGE: {stage}</div>
+              <div className="fs-xs mono">STAGE: {stage === "ai" ? "ANALYZING DATA" : stage}</div>
             </div>
           ) : data ? (
             <ResultViewer
