@@ -232,14 +232,16 @@ def estimate_homography(
     dst: Optional[np.ndarray],
     src_features: Optional[Features] = None,
     dst_features: Optional[Features] = None,
+    mirror: bool = True,
 ) -> Optional[Registration]:
     """Where does `src` appear inside `dst`? Returns the src->dst homography when the pictures show the same
     content (any resolution, aspect ratio, rotation, mirroring, crop), None otherwise.
-    Pass precomputed features to skip extraction (e.g. cached reference images)."""
+    Pass precomputed features to skip extraction (e.g. cached reference images).
+    mirror=False skips the mirrored retry (video frames are never mirrored; it would cost a second SIFT pass)."""
     fs = src_features if src_features is not None else extract_features(src)
     fd = dst_features if dst_features is not None else extract_features(dst)
     best = None
-    for mirrored in (False, True):
+    for mirrored in (False, True) if mirror else (False,):
         reg = _register(fs.mirrored() if mirrored else fs, fs, fd, mirrored)
         if reg is not None and (best is None or reg.inliers > best.inliers):
             best = reg
@@ -309,6 +311,16 @@ def harmonize_resolution(img_a: np.ndarray, homography, b_shape, min_zoom: float
     return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
 
 
+def warp_into(a_shape, img_b: np.ndarray, homography) -> tuple[np.ndarray, np.ndarray]:
+    """img_b warped into A's frame by the B->A homography (black outside B's footprint), and that footprint mask."""
+    h_a, w_a = a_shape[:2]
+    homography = np.asarray(homography, np.float64)
+    aligned_b = cv2.warpPerspective(img_b, homography, (w_a, h_a))
+    white_mask = np.ones(img_b.shape[:2], dtype=np.uint8) * 255
+    valid_mask = cv2.warpPerspective(white_mask, homography, (w_a, h_a))
+    return cv2.bitwise_and(aligned_b, aligned_b, mask=valid_mask), valid_mask
+
+
 def align(img_a: np.ndarray, img_b: np.ndarray, debug: bool = False) -> AlignResult:
     """Warp img_b into img_a's frame: mirror-aware SIFT + MAGSAC (sub-pixel), ECC fallback for feature-poor pairs."""
     if img_a.size == 0 or img_b.size == 0 or img_a.shape[0] == 0 or img_b.shape[0] == 0:
@@ -336,10 +348,7 @@ def align(img_a: np.ndarray, img_b: np.ndarray, debug: bool = False) -> AlignRes
             **{"method": "none", "valid_mask": None}
         )
 
-    aligned_b = cv2.warpPerspective(img_b, homography, (w_a, h_a))
-    white_mask = np.ones(img_b.shape[:2], dtype=np.uint8) * 255
-    valid_mask = cv2.warpPerspective(white_mask, homography, (w_a, h_a))
-    aligned_b = cv2.bitwise_and(aligned_b, aligned_b, mask=valid_mask)
+    aligned_b, valid_mask = warp_into(img_a.shape, img_b, homography)
 
     if debug or os.environ.get("DEBUG_ALIGN", "0") == "1":
         write_debug_overlay(img_a, aligned_b)

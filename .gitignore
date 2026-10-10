@@ -8,3 +8,4 @@ dist/
 backend/output/
 .pytest_cache/
 .idea/
+input/

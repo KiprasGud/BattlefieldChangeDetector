@@ -321,6 +321,20 @@ body {
   background: var(--bg-app);
 }
 
+/* Box overlays cover the letterboxed image (object-fit: contain), not the whole container:
+   the layer gets the image aspect ratio (--ar) and is fitted inside the nearest size container. */
+.diff-container, .fit-host {
+  container-type: size;
+}
+
+.box-layer.fitted {
+  left: 50%;
+  top: 50%;
+  width: min(100cqw, 100cqh * var(--ar));
+  height: min(100cqh, 100cqw / var(--ar));
+  transform: translate(-50%, -50%);
+}
+
 .diff-layer {
   position: absolute;
   inset: 0;
@@ -431,6 +445,134 @@ body.theme-sun {
   --accent-active: #000000;
   --accent-active-text: #FFFFFF;
 }
+
+/* Review: box verdicts on the image */
+.tactical-box.review-accepted {
+  border-color: var(--accent-exec);
+}
+
+.tactical-box.review-accepted .tactical-box-label {
+  background: var(--accent-exec);
+  color: var(--accent-exec-text);
+}
+
+.tactical-box.review-rejected {
+  border-style: dashed;
+  opacity: 0.4;
+}
+
+/* Review: batch queue */
+.batch-row {
+  background: transparent;
+  border: var(--border-width) solid var(--border-main);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 4px 6px;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  outline: none;
+}
+
+.batch-row:hover, .batch-row:focus {
+  border-color: var(--text-main);
+}
+
+.batch-row.active {
+  border-color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.batch-row-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.file-status span:first-child, .inbox-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-status.rejected {
+  border-color: var(--accent-danger);
+  color: var(--accent-danger);
+}
+
+/* Review: pair navigator */
+.pair-nav {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border-bottom: var(--border-width) solid var(--border-main);
+}
+
+.pair-nav-info {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 12px;
+  font-size: 11px;
+}
+
+.tactical-toggle:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Review: findings triage */
+.finding-group-title {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dim);
+  border-bottom: var(--border-width) solid var(--border-main);
+  padding-bottom: 2px;
+}
+
+.finding-row {
+  border: var(--border-width) solid var(--border-main);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.finding-row.selected {
+  border-color: var(--text-main);
+}
+
+.finding-row.review-rejected .finding-text {
+  text-decoration: line-through;
+  color: var(--text-dim);
+}
+
+.finding-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.finding-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.status-pending { color: var(--text-dim); }
+.status-accepted { color: var(--accent-exec); }
+.status-rejected { color: var(--accent-danger); }
 
 /* Inspector */
 .inspector-panel {

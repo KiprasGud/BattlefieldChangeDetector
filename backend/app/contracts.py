@@ -9,6 +9,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Confidence = Literal["high", "medium", "low"]
 AlignMethod = Literal["sift", "ecc", "none"]
+Category = Literal["missing_object", "new_structure", "terrain_change", "unknown_anomaly"]
+
+CATEGORY_LABELS = {
+    "missing_object": "Missing Equipment/Objects",
+    "new_structure": "New Structures/Construction",
+    "terrain_change": "Terrain/Landscape Changes",
+    "unknown_anomaly": "Unknown Anomaly",
+}
 
 
 class Change(BaseModel):
@@ -18,6 +26,7 @@ class Change(BaseModel):
     confidence: Confidence
     box: list[int] = Field(min_length=4, max_length=4)  # [ymin, xmin, ymax, xmax] 0-1000
     sector: Optional[str] = None    # grid label, e.g. "B4"
+    category: Optional[Category] = None  # review bucket, see CATEGORY_LABELS
 
 
 class AnalysisResult(BaseModel):

@@ -24,6 +24,38 @@
 ```
 Interfaces between stages are in `backend/app/contracts.py`. Each stage ships a stub so the full flow works from hour 0.
 
+## Watch-folder batch pipeline (drone video and image pairs)
+```
+ input/Site_A_Day1.mp4 + input/Site_A_Day2.mov          (WATCH_DIR, default <repo>/input)
+   │
+   ├─0─ watcher: file settled (2 s quiet, size/mtime unchanged) → name pairing → batch row  (ingest/)
+   │      <key>_<Before|After|DayN>, extension ignored; Day1→Day2→Day3 pair consecutively
+   │      same content pair (sha256 of both files) is never processed twice
+   ├─1─ frames: still image = 1 frame; video → FFmpeg 0.5 fps, long side ≤ 1920, -noautorotate  (video/extract.py)
+   ├─2─ frame matching (video/match.py): content only, never timestamps
+   │      SIFT at 640 px → VLAD retrieval (top 4 B frames per A frame) → SIFT + MAGSAC homography check
+   │      → footprint overlap ≥ 0.5 → best B frame per A frame → drop A frames repeating chosen ground
+   │      → ≤ MATCH_MAX_PAIRS pairs, each scored by inliers, overlap and SSIM
+   ├─3─ per pair: align() at full resolution (fallback: the verified matching homography)
+   │      → change_heatmap with B's uncovered area filled by A's pixels → candidate boxes
+   │      pairs without a candidate box are dropped (same ground, no difference)
+   ├─4─ AI_ENABLED=1: analyze() (Gemini 3.5 Flash-Lite, heatmap boxes as hints, 4 review categories)
+   │    AI_ENABLED=0, no key, MOCK_LLM=1 or Gemini error: heatmap boxes as "unknown_anomaly"
+   └─5─ annotate + store pair and findings (SQLite, never auto-pruned) → review dashboard → report
+```
+- One batch runs at a time (worker thread): the CV work is CPU-bound. A restart re-queues unfinished batches.
+- Gemini cost per batch is bounded: ≤ 1920 px frames are never tiled, so ≤ 2 calls (detection + verification)
+  per curated pair, ≤ 2 × `MATCH_MAX_PAIRS` per batch, and nothing for pairs without a CV difference.
+- The heatmap code (`diff/heatmap.py`) is shared and unchanged. Only the batch path fills B's uncovered area with
+  A's pixels before calling it, so partial-overlap frames do not light up along the coverage border
+  (`pipeline.compute_heatmap(fill_uncovered=True)`); `/api/analyze` keeps the original input.
+- Review categories: `missing_object`, `new_structure`, `terrain_change`, `unknown_anomaly`
+  (labels in `contracts.CATEGORY_LABELS`). The reviewer accepts or rejects each finding; the report
+  (`render/report.py`, JSON or self-contained HTML) lists accepted findings only.
+- Limits: the homography models the ground plane, so tall objects keep some parallax (the AI verification pass and
+  the reviewer filter it); overlays burned into the video image (OSD text) can cause false frame matches; a video is
+  read up to 900 frames (30 min at 0.5 fps).
+
 ## Visual matching (stage 1)
 Image B is matched to A by what is in the picture, never by file properties. It tolerates any resolution or aspect
 ratio, zoom between 0.2x and 5x, any rotation, mirroring (horizontal, vertical, transposed) and crops down to

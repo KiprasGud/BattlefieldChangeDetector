@@ -1,6 +1,7 @@
 """PERSON 3: orchestrates align -> diff/heatmap -> analyze -> annotate."""
 import time
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -9,8 +10,10 @@ import numpy as np
 
 from .alignment import IMREAD_PIXELS, align, harmonize_resolution
 from .analysis import analyze, use_mock
-from .contracts import AnalyzeResponse
+from .analysis.postprocess import clean_box, sector_for
+from .contracts import AlignResult, AnalysisResult, AnalyzeResponse, Change
 from .render import annotate
+from .settings import ai_enabled
 
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "output"
 
@@ -26,6 +29,64 @@ def decode(data: bytes, label: str = "image") -> np.ndarray:
 
 def is_mirrored(homography) -> bool:
     return homography is not None and np.linalg.det(np.asarray(homography, np.float64)[:2, :2]) < 0
+
+
+def compute_heatmap(
+    img_a: np.ndarray, img_b: np.ndarray, aligned: AlignResult, fill_uncovered: bool = False,
+) -> tuple[Optional[np.ndarray], Optional[list[list[int]]]]:
+    """Change heatmap of A vs aligned B and its candidate boxes; (None, None) if it cannot be computed.
+    The heatmap itself (diff/heatmap.py) is never changed here, only what it is given:
+    - A is blurred to B's resolution when B is coarser (harmonize_resolution, no-op otherwise);
+    - fill_uncovered=True (batch path only) gives B's uncovered area A's pixels, so the coverage border cannot
+      bleed into the blurred heatmap. The single-pair flow keeps the validated input (False)."""
+    try:
+        from .diff.heatmap import candidate_boxes, change_heatmap
+        valid_mask = getattr(aligned, "valid_mask", None)
+        try:
+            # B coarser than A: blur A to B's resolution so edges don't light up (no-op otherwise).
+            diff_a = harmonize_resolution(img_a, aligned.homography, img_b.shape)
+        except Exception:
+            diff_a = img_a
+        diff_b = aligned.aligned_b
+        if fill_uncovered and valid_mask is not None:
+            diff_b = np.where((valid_mask == 255)[..., None], aligned.aligned_b, diff_a)
+        heat_map = change_heatmap(diff_a, diff_b, valid_mask)
+        return heat_map, candidate_boxes(heat_map)
+    except (ImportError, Exception):
+        return None, None
+
+
+def heatmap_image(heat_map: np.ndarray) -> np.ndarray:
+    heat_uint8 = (np.clip(heat_map, 0, 1) * 255).astype(np.uint8)
+    return cv2.applyColorMap(heat_uint8, cv2.COLORMAP_JET)
+
+
+def cv_result(hints: Optional[list[list[int]]]) -> AnalysisResult:
+    """Heatmap candidate boxes as the result when the AI step is off. Nothing classifies them, so every box is
+    an unknown anomaly with low confidence until a reviewer looks at it."""
+    changes = []
+    for i, raw in enumerate(hints or [], 1):
+        box = clean_box(raw)
+        if box is None:
+            continue
+        sector = sector_for(box)
+        changes.append(Change(
+            type="pixel difference",
+            description=f"Heatmap region {i}: colour or texture differs between the images.",
+            location_text=f"sector {sector}",
+            confidence="low",
+            box=box,
+            sector=sector,
+            category="unknown_anomaly",
+        ))
+    n = len(changes)
+    return AnalysisResult(
+        report_date=date.today().isoformat(),
+        summary=f"CV-only analysis: the change heatmap flagged {n} region{'' if n == 1 else 's'}. "
+                "AI analysis is off, so the regions are not classified.",
+        changes=changes,
+        recommendation="Review every flagged region manually." if n else "No pixel or structural differences flagged.",
+    )
 
 
 def run(
@@ -83,44 +144,38 @@ def run(
     if stage_callback:
         stage_callback("heatmap", timings)
     t0 = time.perf_counter()
-    hints = None
-    try:
-        from .diff.heatmap import candidate_boxes, change_heatmap
-        valid_mask = getattr(aligned, "valid_mask", None)
+    heat_map, hints = compute_heatmap(img_a, img_b, aligned)
+    if heat_map is not None:
         try:
-            # B coarser than A: blur A to B's resolution so edges don't light up (no-op otherwise).
-            diff_a = harmonize_resolution(img_a, aligned.homography, img_b.shape)
+            cv2.imwrite(str(job_dir / "heatmap.jpg"), heatmap_image(heat_map))
+            images["heatmap_url"] = f"/api/files/{job_id}/heatmap.jpg"
         except Exception:
-            diff_a = img_a
-        heat_map = change_heatmap(diff_a, aligned.aligned_b, valid_mask)
-        hints = candidate_boxes(heat_map)
-        heat_uint8 = (np.clip(heat_map, 0, 1) * 255).astype(np.uint8)
-        heat_color = cv2.applyColorMap(heat_uint8, cv2.COLORMAP_JET)
-        cv2.imwrite(str(job_dir / "heatmap.jpg"), heat_color)
-        images["heatmap_url"] = f"/api/files/{job_id}/heatmap.jpg"
-    except (ImportError, Exception):
-        pass
+            pass
     timings["heatmap"] = round(time.perf_counter() - t0, 3)
 
-    # Stage 3: AI Analysis (with automatic offline fallback)
+    # Stage 3: AI Analysis (with automatic offline fallback), skipped when the AI step is switched off
     if stage_callback:
         stage_callback("ai", timings)
     t0 = time.perf_counter()
-    offline = use_mock()
-    if offline:
-        warnings.append("OFFLINE MODE: MOCK_LLM=1 or no GEMINI_API_KEY. Using fixture data.")
-    try:
-        result = analyze(img_a, aligned.aligned_b, criteria, lang, hints=hints, aligned=aligned.ok)
-    except Exception as e:
-        # Automatic offline fallback: switch to mock fixture when Gemini fails
+    if not ai_enabled():
+        result = cv_result(hints)
+        warnings.append("AI step disabled: showing change-heatmap regions only (unclassified).")
+    else:
+        offline = use_mock()
+        if offline:
+            warnings.append("OFFLINE MODE: MOCK_LLM=1 or no GEMINI_API_KEY. Using fixture data.")
         try:
-            from .analysis.mock import analyze_mock
-            result = analyze_mock(img_a, aligned.aligned_b, criteria, lang)
-            offline = True
-            reason = str(e)[:120] or type(e).__name__
-            warnings.append(f"OFFLINE MODE: Gemini API unavailable ({reason}). Using fixture data.")
-        except Exception as fallback_err:
-            raise RuntimeError(f"Both Gemini and mock fallback failed: {fallback_err}") from e
+            result = analyze(img_a, aligned.aligned_b, criteria, lang, hints=hints, aligned=aligned.ok)
+        except Exception as e:
+            # Automatic offline fallback: switch to mock fixture when Gemini fails
+            try:
+                from .analysis.mock import analyze_mock
+                result = analyze_mock(img_a, aligned.aligned_b, criteria, lang)
+                offline = True
+                reason = str(e)[:120] or type(e).__name__
+                warnings.append(f"OFFLINE MODE: Gemini API unavailable ({reason}). Using fixture data.")
+            except Exception as fallback_err:
+                raise RuntimeError(f"Both Gemini and mock fallback failed: {fallback_err}") from e
     timings["ai"] = round(time.perf_counter() - t0, 3)
 
 

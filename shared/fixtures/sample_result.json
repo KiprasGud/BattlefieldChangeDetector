@@ -8,6 +8,7 @@
       "location_text": "upper right, near road junction",
       "confidence": "high",
       "box": [120, 600, 320, 900],
+      "category": "terrain_change",
       "sector": "B4"
     },
     {
@@ -16,6 +17,7 @@
       "location_text": "center, left of the road",
       "confidence": "medium",
       "box": [450, 300, 560, 420],
+      "category": "terrain_change",
       "sector": "C2"
     }
   ],

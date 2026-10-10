@@ -12,6 +12,7 @@
       "tags": ["crater", "structure"],
       "confidence": "high",
       "box": [422, 464, 547, 562],
+      "category": "unknown_anomaly",
       "type": {"en": "roof breach / impact", "lt": "stogo pramuša / pataikymas"},
       "description": {
         "en": "Dark circular hole in the roof of the structure, not present in the baseline image.",
@@ -26,6 +27,7 @@
       "tags": ["tree", "cable", "earthworks"],
       "confidence": "medium",
       "box": [702, 136, 783, 490],
+      "category": "terrain_change",
       "type": {"en": "felled tree / linear feature", "lt": "nuvirtęs medis / linijinis objektas"},
       "description": {
         "en": "New dark bent line across the grass south of the road; consistent with a felled trunk, possibly a trench or cable.",

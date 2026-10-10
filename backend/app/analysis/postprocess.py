@@ -4,7 +4,7 @@ from typing import Optional
 
 import numpy as np
 
-from ..contracts import AnalysisResult, Change
+from ..contracts import CATEGORY_LABELS, AnalysisResult, Change
 
 MIN_SIDE = 5  # boxes thinner than this (in 0-1000 units) are dropped
 BLACK_LEVEL = 3  # pixel max channel <= this counts as warp border
@@ -45,6 +45,12 @@ def normalize_confidence(value) -> str:
     return CONFIDENCE_MAP.get(str(value).strip().lower(), "low")
 
 
+def normalize_category(value) -> str:
+    """One of the four review buckets; anything else (missing, misspelled) is an unknown anomaly."""
+    code = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    return code if code in CATEGORY_LABELS else "unknown_anomaly"
+
+
 def coverage_mask(img: Optional[np.ndarray]) -> Optional[np.ndarray]:
     """True where image B has real pixels. Pure black = outside camera coverage after the warp.
     None when the image is (almost) all black, e.g. synthetic test input: then nothing is filtered."""
@@ -82,6 +88,7 @@ def to_result(raw: dict, image_b: Optional[np.ndarray] = None) -> AnalysisResult
             confidence=normalize_confidence(c.get("confidence")),
             box=box,
             sector=sector_for(box),
+            category=normalize_category(c.get("category")),
         ))
     return AnalysisResult(
         report_date=date.today().isoformat(),

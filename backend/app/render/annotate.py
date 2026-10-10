@@ -4,6 +4,13 @@ import numpy as np
 
 from ..contracts import AnalysisResult
 
+CATEGORY_CODES = {
+    "missing_object": "MISS",
+    "new_structure": "STRUCT",
+    "terrain_change": "TERR",
+    "unknown_anomaly": "UNK",
+}
+
 
 def draw_grid_overlay(img: np.ndarray, opacity: float = 0.25) -> np.ndarray:
     """Draw a 4x4 tactical sector grid (columns A-D, rows 1-4) onto the image."""
@@ -94,6 +101,8 @@ def annotate(img: np.ndarray, result: AnalysisResult, draw_grid: bool = False) -
         label_text = f"#{i}"
         if c.sector:
             label_text += f" [{c.sector}]"
+        if c.category:
+            label_text += f" {CATEGORY_CODES.get(c.category, 'UNK')}"
 
         font = cv2.FONT_HERSHEY_DUPLEX
         font_scale = 0.55

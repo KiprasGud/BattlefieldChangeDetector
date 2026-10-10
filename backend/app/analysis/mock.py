@@ -110,6 +110,7 @@ def analyze_mock(img_a, aligned_b, criteria: str, lang: str = "en") -> AnalysisR
         "changes": [
             {
                 "type": _pick(c["type"], lang),
+                "category": c.get("category"),
                 "description": _pick(c["description"], lang),
                 "location_text": _pick(c["location_text"], lang),
                 "confidence": c["confidence"],
