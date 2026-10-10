@@ -94,7 +94,7 @@ function ImageDrop({
   return (
     <div
       className={`drop-zone${dragging ? " dragging" : ""}`}
-      style={{ borderColor: dragging ? "var(--accent-cyan)" : file ? accent : undefined }}
+      style={{ borderColor: dragging ? "var(--brand-base)" : file ? accent : undefined }}
       onDragOver={(e) => {
         e.preventDefault();
         if (!disabled) setDragging(true);
@@ -227,9 +227,9 @@ export default function UploadPanel({ onSubmit, onError, loading, lang, onLangCh
                 disabled={loading || loadingSample !== null}
                 className="btn-secondary small"
                 title={s.description}
-                style={{ borderColor: loadingSample === s.id ? "var(--accent-cyan)" : undefined }}
+                style={{ borderColor: loadingSample === s.id ? "var(--brand-base)" : undefined }}
               >
-                <span style={{ color: "var(--accent-cyan)" }}>⚡</span> {s.name}
+                <span className="accent">⚡</span> {s.name}
                 {loadingSample === s.id && " (Loading…)"}
               </button>
             ))}
@@ -245,7 +245,7 @@ export default function UploadPanel({ onSubmit, onError, loading, lang, onLangCh
           subtitle="Past / Baseline"
           icon="📷"
           hint={`PNG, JPEG up to ${MAX_FILE_MB} MB`}
-          accent="var(--accent-emerald)"
+          accent="var(--accent-success)"
           file={a}
           disabled={loading}
           onFile={setA}
@@ -256,7 +256,7 @@ export default function UploadPanel({ onSubmit, onError, loading, lang, onLangCh
           subtitle="Present / Recon"
           icon="🛰️"
           hint="Warped & registered to frame A"
-          accent="var(--accent-cyan)"
+          accent="var(--brand-base)"
           file={b}
           disabled={loading}
           onFile={setB}
@@ -271,7 +271,7 @@ export default function UploadPanel({ onSubmit, onError, loading, lang, onLangCh
           </label>
           <span className="dim xsmall">Toggle chips or write free-form instructions</span>
         </div>
-        <div className="chip-row" style={{ marginBottom: "10px" }}>
+        <div className="chip-row section">
           {PRESET_CRITERIA.map((p) => {
             const isSelected = hasPreset(criteria, p);
             return (
