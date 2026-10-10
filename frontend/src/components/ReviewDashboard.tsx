@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  clearQueue,
   fetchBatch,
   fetchBatches,
   fetchInbox,
@@ -16,6 +17,7 @@ import {
   type ReviewStatus,
 } from "../api";
 import { CATEGORY_LABELS, CATEGORY_ORDER, type AlignMethod, type AnalyzeResponse } from "../types";
+import ReportViewer from "./ReportViewer";
 import ResultViewer from "./ResultViewer";
 
 const POLL_MS = 3000;
@@ -72,6 +74,7 @@ export default function ReviewDashboard({ onExit }: Props) {
   const [findingIdx, setFindingIdx] = useState<number | null>(null);
   const [statusLine, setStatusLine] = useState("[SYS] Review terminal online.");
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -113,9 +116,13 @@ export default function ReviewDashboard({ onExit }: Props) {
     };
   }, [selectedId, rowStamp]);
 
-  useEffect(() => setPairIdx(0), [selectedId]);
+  useEffect(() => {
+    setPairIdx(0);
+    setReportOpen(false);
+  }, [selectedId]);
 
-  const pairs = detail && detail.id === selectedId ? detail.pairs : [];
+  const shown = detail && detail.id === selectedId ? detail : null;
+  const pairs = shown ? shown.pairs : [];
   const pair = pairs.length ? pairs[clamp(pairIdx, 0, pairs.length - 1)] : null;
 
   // Findings in display order: grouped by category, then by number.
@@ -157,9 +164,42 @@ export default function ReviewDashboard({ onExit }: Props) {
   const toggleAi = async () => {
     if (!settings) return;
     try {
-      const s = await updateSettings(!settings.ai_enabled);
+      const s = await updateSettings({ ai_enabled: !settings.ai_enabled });
       setSettings(s);
       setStatusLine(`[SYS] AI STEP ${s.ai_enabled ? "ON" : "OFF"} FOR NEW BATCHES.`);
+    } catch (e: any) {
+      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    }
+  };
+
+  const toggleAutoBatch = async () => {
+    if (!settings) return;
+    try {
+      const s = await updateSettings({ auto_batch: !settings.auto_batch });
+      setSettings(s);
+      setStatusLine(
+        s.auto_batch
+          ? "[SYS] AUTO-BATCHING STARTED: INBOX PROJECTS QUEUED, WORKER RESUMED."
+          : "[SYS] AUTO-BATCHING STOPPED: NEW FILES STAY IN THE INBOX, WORKER PAUSED."
+      );
+      await refresh();
+    } catch (e: any) {
+      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    }
+  };
+
+  const clearBatchQueue = async () => {
+    if (!settings || settings.auto_batch || !settings.queued_count) return;
+    const ok = window.confirm(
+      `Clear ${settings.queued_count} queued batch(es)? Their files go back to the inbox, unbatched. ` +
+        "Finished legs and their reviews are kept."
+    );
+    if (!ok) return;
+    try {
+      const r = await clearQueue();
+      setStatusLine(`[SYS] QUEUE CLEARED: ${r.deleted.length} BATCH(ES) DROPPED, ${r.files.length} FILE(S) BACK IN INBOX.`);
+      if (selectedId && r.deleted.includes(selectedId)) setSelectedId(null);
+      await refresh();
     } catch (e: any) {
       setStatusLine(`[ERR] ${e?.message || String(e)}`);
     }
@@ -207,6 +247,7 @@ export default function ReviewDashboard({ onExit }: Props) {
       if (e.altKey) {
         const key = e.key.toLowerCase();
         if (key === "i") toggleAi();
+        else if (key === "b") toggleAutoBatch();
         else if (key === "q") requeue();
         else if (e.key === "ArrowUp") moveBatch(-1);
         else if (e.key === "ArrowDown") moveBatch(1);
@@ -216,7 +257,17 @@ export default function ReviewDashboard({ onExit }: Props) {
       }
       if (e.ctrlKey || e.metaKey) return;
       const key = e.key.toLowerCase();
-      if (e.key === "ArrowLeft") setPairIdx((i) => clamp(i - 1, 0, Math.max(0, pairs.length - 1)));
+      if (reportOpen) {
+        // The report is read-only: no triage keys while it covers the pair viewer.
+        if (e.key === "Escape" || key === "v") setReportOpen(false);
+        else if (key === "e") exportReport("html");
+        else if (key === "j") exportReport("json");
+        else return;
+        e.preventDefault();
+        return;
+      }
+      if (key === "v" && shown) setReportOpen(true);
+      else if (e.key === "ArrowLeft") setPairIdx((i) => clamp(i - 1, 0, Math.max(0, pairs.length - 1)));
       else if (e.key === "ArrowRight") setPairIdx((i) => clamp(i + 1, 0, Math.max(0, pairs.length - 1)));
       else if (e.key === "ArrowUp") moveFinding(-1);
       else if (e.key === "ArrowDown") moveFinding(1);
@@ -232,10 +283,10 @@ export default function ReviewDashboard({ onExit }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const shown = detail && detail.id === selectedId ? detail : null;
   const isStill = (kind: string | null) => kind === "image";
-  const timeA = pair && shown ? (isStill(shown.kind_a) ? "STILL" : clock(pair.time_a)) : "";
-  const timeB = pair && shown ? (isStill(shown.kind_b) ? "STILL" : clock(pair.time_b)) : "";
+  const timeA = pair ? (isStill(pair.kind_a) ? "STILL" : clock(pair.time_a)) : "";
+  const timeB = pair ? (isStill(pair.kind_b) ? "STILL" : clock(pair.time_b)) : "";
+  const unbatched = inbox?.groups?.filter((g) => !g.batched) ?? [];
 
   let center: JSX.Element;
   if (!shown) {
@@ -276,8 +327,10 @@ export default function ReviewDashboard({ onExit }: Props) {
             [←] PREV
           </button>
           <div className="pair-nav-info mono">
-            <span className="text-warn">PAIR {pad2(pair.idx)}/{pad2(pairs.length)}</span>
-            <span>A@{timeA} ↔ B@{timeB}</span>
+            <span className="text-warn">PAIR {pad2(pairs.indexOf(pair) + 1)}/{pad2(pairs.length)}</span>
+            <span>
+              {pair.tag_a}@{timeA} ↔ {pair.tag_b}@{timeB}
+            </span>
             <span className="text-dim">
               INL {pair.inliers} · OVL {pct(pair.overlap)} · SSIM {pair.ssim.toFixed(2)} · Δ {pct(pair.change_ratio)} · SRC{" "}
               {pair.source.toUpperCase()}
@@ -323,6 +376,20 @@ export default function ReviewDashboard({ onExit }: Props) {
 
           <div className="control-group">
             <div className="control-label">PIPELINE</div>
+            <button className="btn-exec" onClick={toggleAutoBatch} disabled={!settings}>
+              <span>AUTO-BATCHING: {settings ? (settings.auto_batch ? "RUNNING" : "STOPPED") : "..."}</span>
+              <span className="shortcut-key">[ALT+B]</span>
+            </button>
+            <div className="fs-xs mono text-dim">
+              {settings?.auto_batch
+                ? "NEW FILES ARE GROUPED BY PROJECT AND QUEUED"
+                : `PAUSED: FILES WAIT IN THE INBOX · ${settings?.queued_count ?? 0} QUEUED`}
+            </div>
+            {settings && !settings.auto_batch && (
+              <button className="tactical-toggle" onClick={clearBatchQueue} disabled={!settings.queued_count}>
+                CLEAR BATCH QUEUE ({settings.queued_count})
+              </button>
+            )}
             <button className={`tactical-toggle ${settings?.ai_enabled ? "active" : ""}`} onClick={toggleAi} disabled={!settings}>
               [ALT+I] AI ANALYSIS: {settings ? (settings.ai_enabled ? "ON" : "OFF") : "..."}
             </button>
@@ -347,6 +414,14 @@ export default function ReviewDashboard({ onExit }: Props) {
                 <span>WAITING FOR PAIR</span>
               </div>
             ))}
+            {unbatched.map((g) => (
+              <div className="file-status unbatched" key={g.project} title={g.files.join("\n")}>
+                <span>{g.site}</span>
+                <span>
+                  {g.epochs.length} EPOCHS · UNBATCHED
+                </span>
+              </div>
+            ))}
             {inbox?.rejected.map((r) => (
               <div className="file-status rejected" key={r.name} title={r.reason}>
                 <span>{r.name}</span>
@@ -367,7 +442,7 @@ export default function ReviewDashboard({ onExit }: Props) {
                   <div className="batch-row-line">
                     <span>{b.site}</span>
                     <span>
-                      {b.tag_a} → {b.tag_b}
+                      {b.tag_a} → {b.tag_b} · {b.legs_count} {b.legs_count === 1 ? "LEG" : "LEGS"}
                     </span>
                   </div>
                   <div className="batch-row-line">
@@ -400,8 +475,11 @@ export default function ReviewDashboard({ onExit }: Props) {
             </div>
           )}
         </div>
-        <div className="pane-content" style={{ padding: 0 }}>
+        <div className="pane-content" style={{ padding: 0, position: "relative" }}>
           {center}
+          {reportOpen && shown && (
+            <ReportViewer batch={shown} onClose={() => setReportOpen(false)} onExport={exportReport} />
+          )}
         </div>
       </main>
 
@@ -499,14 +577,17 @@ export default function ReviewDashboard({ onExit }: Props) {
 
           <div className="control-group">
             <div className="control-label">VERIFIED CHANGE REPORT</div>
-            <button className="btn-exec" disabled={!shown} onClick={() => exportReport("html")}>
-              <span>EXPORT REPORT</span>
-              <span className="shortcut-key">[E]</span>
+            <button className="btn-exec" disabled={!shown} onClick={() => setReportOpen((o) => !o)}>
+              <span>{reportOpen ? "CLOSE REPORT" : "VIEW REPORT"}</span>
+              <span className="shortcut-key">[V]</span>
+            </button>
+            <button className="tactical-toggle" disabled={!shown} onClick={() => exportReport("html")}>
+              [E] EXPORT HTML
             </button>
             <button className="tactical-toggle" disabled={!shown} onClick={() => exportReport("json")}>
               [J] EXPORT JSON
             </button>
-            <div className="fs-xs mono text-dim">[←/→] PAIR · [↑/↓] FINDING · [A]/[R]/[U] ACCEPT/REJECT/RESET</div>
+            <div className="fs-xs mono text-dim">[←/→] PAIR · [↑/↓] FINDING · [A]/[R]/[U] ACCEPT/REJECT/RESET · [V] REPORT</div>
             <div className={`fs-xs mono ${statusLine.startsWith("[ERR]") ? "text-danger" : "text-dim"}`}>{statusLine}</div>
           </div>
         </div>

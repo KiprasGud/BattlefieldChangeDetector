@@ -32,6 +32,11 @@ def verified_pairs(detail: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def leg_label(item: dict[str, Any]) -> str:
+    """'Day1→Day2' for a leg or for a pair carrying its leg's tags."""
+    return f"{item.get('tag_a') or '?'}→{item.get('tag_b') or '?'}"
+
+
 def _totals(pairs: list[dict[str, Any]]) -> dict[str, int]:
     totals = {label: 0 for label in CATEGORY_LABELS.values()}
     for pair in pairs:
@@ -47,10 +52,15 @@ def build_json(detail: dict[str, Any]) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "batch": {k: detail.get(k) for k in (
             "id", "site", "name_a", "name_b", "tag_a", "tag_b", "kind_a", "kind_b", "ai_enabled", "created_at")},
+        "legs": [
+            {"leg": leg["idx"], "label": leg_label(leg), **{k: leg.get(k) for k in (
+                "tag_a", "tag_b", "name_a", "name_b", "kind_a", "kind_b", "status")}}
+            for leg in detail.get("legs", [])
+        ],
         "totals": _totals(pairs),
         "verified_changes": [
             {
-                "pair": p["idx"], "time_a": p["time_a"], "time_b": p["time_b"], "source": p["source"],
+                "leg": p.get("leg_idx"), "leg_label": leg_label(p), "pair": p["idx"], "time_a": p["time_a"], "time_b": p["time_b"], "source": p["source"],
                 "category": f["category"], "category_label": CATEGORY_LABELS.get(f["category"], f["category"]),
                 "type": f["type"], "description": f["description"], "location_text": f["location_text"],
                 "confidence": f["confidence"], "sector": f["sector"], "box": f["box"],
@@ -107,7 +117,8 @@ def build_html(detail: dict[str, Any], batch_dir: Path) -> str:
                 f"<td>{_img(crop_a, 'before', 'crop')}</td><td>{_img(crop_b, 'after', 'crop')}</td></tr>"
             )
         sections.append(
-            f"<section class='pair'><h2>PAIR {p['idx']:02d} &middot; A@{_clock(p['time_a'])} &harr; "
+            f"<section class='pair'><h2>{e(leg_label(p).upper())} &middot; PAIR {p['idx']:02d} &middot; "
+            f"A@{_clock(p['time_a'])} &harr; "
             f"B@{_clock(p['time_b'])}</h2>"
             f"<div class='meta mono'>INLIERS {p['inliers']} &middot; OVERLAP {p['overlap'] * 100:.0f}% &middot; "
             f"SSIM {p['ssim']:.2f} &middot; SOURCE {e(str(p['source']).upper())}</div>"
@@ -140,6 +151,7 @@ def build_html(detail: dict[str, Any], batch_dir: Path) -> str:
 <h1>VERIFIED CHANGE REPORT</h1>
 <table class="head mono"><tr>
   <td>SITE: {e(str(detail.get('site') or '-'))}</td>
+  <td>LEGS: {e(', '.join(leg_label(leg) for leg in detail.get('legs', [])) or '-')}</td>
   <td>A: {e(str(detail.get('name_a') or '-'))} ({e(str(detail.get('kind_a') or '?'))})</td>
   <td>B: {e(str(detail.get('name_b') or '-'))} ({e(str(detail.get('kind_b') or '?'))})</td>
   <td>AI: {'ON' if detail.get('ai_enabled') else 'OFF'}</td>

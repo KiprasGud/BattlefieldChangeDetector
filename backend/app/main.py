@@ -47,6 +47,7 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    batch.sync_worker()
     batch.resume_interrupted()
     if watcher.watch_enabled():
         try:
@@ -262,7 +263,8 @@ def get_jobs_history(limit: int = Query(50, ge=1, le=100)):
 # --- watch-folder batches and review ---------------------------------------------------------------
 
 class SettingsUpdate(BaseModel):
-    ai_enabled: bool
+    ai_enabled: Optional[bool] = None
+    auto_batch: Optional[bool] = None
 
 
 class ReviewUpdate(BaseModel):
@@ -274,6 +276,8 @@ def _settings() -> dict[str, Any]:
     return {
         "ai_enabled": settings.ai_enabled(),
         "ai_available": not use_mock(),
+        "auto_batch": settings.auto_batch_enabled(),
+        "queued_count": batch_store.queued_count(),
         "watch_enabled": svc is not None,
         "watch_dir": str(svc.folder if svc else watcher.watch_dir()),
         "frame_fps": frame_fps(),
@@ -288,21 +292,56 @@ def get_settings():
 
 @app.put("/api/settings")
 def put_settings(update: SettingsUpdate):
-    """Switch the AI step for batches queued from now on (and for /api/analyze) until restart."""
-    settings.set_ai_enabled(update.ai_enabled)
+    """Until restart: ai_enabled switches the AI step for batches queued from now on (and for /api/analyze);
+    auto_batch starts or stops automatic batching. Stopping keeps new files in the inbox and pauses the worker after
+    the batch it is running; starting resumes the worker and batches everything waiting in the inbox."""
+    if update.ai_enabled is not None:
+        settings.set_ai_enabled(update.ai_enabled)
+    if update.auto_batch is not None:
+        settings.set_auto_batch(update.auto_batch)
+        batch.sync_worker()
+        svc = watcher.service()
+        if update.auto_batch and svc is not None:
+            svc.batch_waiting()
     return _settings()
+
+
+@app.post("/api/queue/clear")
+def clear_queue():
+    """Flush the batch queue; its files go back to the inbox, unbatched. Only while automatic batching is stopped."""
+    if settings.auto_batch_enabled():
+        raise HTTPException(status_code=409, detail="Stop automatic batching before clearing the queue.")
+    return batch.clear_queue()
+
+
+def _inbox_groups(svc) -> list[dict[str, Any]]:
+    """Projects in the inbox; batched when every consecutive pair of their files is a leg of a batch not failed."""
+    legs = batch_store.project_legs()
+    groups = []
+    for group in svc.inbox.groups():
+        project = group[0].site
+        pairs = {(a.path.name, b.path.name) for a, b in zip(group, group[1:])}
+        groups.append({
+            "project": project, "site": group[0].key, "files": [m.path.name for m in group],
+            "epochs": [m.tag for m in group], "batched": pairs <= legs.get(project, set()),
+        })
+    return groups
 
 
 @app.get("/api/inbox")
 def get_inbox():
-    """Files in the watch folder waiting for a partner, and names that do not follow the scheme."""
+    """Files in the watch folder waiting for a partner, projects (batched or not), and names that do not follow the
+    scheme."""
     svc = watcher.service()
     snapshot = svc.inbox.snapshot() if svc else {"waiting": [], "paired": [], "rejected": []}
-    return {"watching": svc is not None, "folder": _settings()["watch_dir"], "scheme": SCHEME, **snapshot}
+    groups = _inbox_groups(svc) if svc else []
+    return {"watching": svc is not None, "folder": _settings()["watch_dir"], "scheme": SCHEME, "groups": groups,
+            **snapshot}
 
 
 @app.get("/api/batches")
 def get_batches(limit: int = Query(50, ge=1, le=200)):
+    """Newest first; one row per project batch (legs_count consecutive epoch comparisons)."""
     return batch_store.list_batches(limit)
 
 

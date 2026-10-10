@@ -62,8 +62,9 @@ class Inbox:
         self._slots: dict[tuple[str, tuple[int, int]], MediaName] = {}
         self._rejected: dict[Path, str] = {}
 
-    def add(self, path) -> list[tuple[MediaName, MediaName]]:
-        """Register a file; returns every consecutive pair of its site (the caller skips pairs already done)."""
+    def add(self, path) -> list[MediaName]:
+        """Register a file; returns every file of its site in epoch order (the caller batches the site as one project
+        and skips legs already done). Empty when the file is rejected."""
         path = Path(path)
         item = parse_name(path)
         with self._lock:
@@ -77,7 +78,15 @@ class Inbox:
                 self._rejected[path] = f"conflicts with {current.path.name} (same site and epoch)"
                 return []
             self._slots[slot] = item
-            return pairs_for([m for (site, _), m in self._slots.items() if site == item.site])
+            return sorted((m for (site, _), m in self._slots.items() if site == item.site), key=lambda m: m.order)
+
+    def groups(self) -> list[list[MediaName]]:
+        """Every site with at least two epochs, each in epoch order: the projects that can be batched."""
+        with self._lock:
+            sites: dict[str, list[MediaName]] = {}
+            for (site, _), item in self._slots.items():
+                sites.setdefault(site, []).append(item)
+        return [sorted(items, key=lambda m: m.order) for _, items in sorted(sites.items()) if len(items) > 1]
 
     def remove(self, path) -> None:
         path = Path(path)

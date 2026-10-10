@@ -69,31 +69,46 @@ Returns list of recent missions:
 `200 [{"job_id": "...", "created_at": "...", "status": "done", "criteria": "...", "summary": "...", "changes_count": 2, ...}]`
 
 ## Watch-folder batches and review
-Media dropped into the watch folder (`WATCH_DIR`) is paired by name and processed as a batch; see
+Media dropped into the watch folder (`WATCH_DIR`) is grouped by name: every epoch of one project (naming key) is one
+batch, with one *leg* per consecutive epoch step (`Day1→Day2`, `Day2→Day5`); see
 [architecture.md](architecture.md#watch-folder-batch-pipeline-drone-video-and-image-pairs).
 
 ### GET /api/settings · PUT /api/settings
-`200 {"ai_enabled": true, "ai_available": false, "watch_enabled": true, "watch_dir": "...", "frame_fps": 0.5, "max_pairs": 20}`
+`200 {"ai_enabled": true, "ai_available": false, "auto_batch": true, "queued_count": 0, "watch_enabled": true, "watch_dir": "...", "frame_fps": 0.5, "max_pairs": 20}`
 - `PUT` body `{"ai_enabled": false}` switches the AI step for batches queued from now on and for `/api/analyze`, until
   restart (`AI_ENABLED` is the default). `ai_available` is `false` when `MOCK_LLM=1` or no `GEMINI_API_KEY`: batches
   then fall back to CV results.
+- `PUT` body `{"auto_batch": false}` stops automatic batching until restart (`AUTO_BATCH` is the default): settled
+  files stay in the inbox unbatched and the worker pauses after the batch it is running. `{"auto_batch": true}`
+  batches every project waiting in the inbox and resumes the worker. Both fields are optional.
+
+### POST /api/queue/clear
+Only while automatic batching is stopped (`409` otherwise). Flushes every `queued` batch; the running one is left
+alone. A batch with no finished leg is deleted; a batch re-opened by a new epoch loses only its unfinished legs and
+goes back to `done`, so finished reviews survive. Its files show up in the inbox as unbatched again.
+`200 {"deleted": ["<batch id>", ...], "files": ["ProjectX_Day5.jpg", ...]}`
 
 ### GET /api/inbox
-`200 {"watching": true, "folder": "...", "scheme": "<key>_<Before|After|DayN>, ...", "waiting": ["Lone_Day1.jpg"], "paired": [...], "rejected": [{"name": "clip.mp4", "reason": "name does not follow ..."}]}`
+`200 {"watching": true, "folder": "...", "scheme": "<key>_<Before|After|DayN>, ...", "waiting": ["Lone_Day1.jpg"], "paired": [...], "rejected": [{"name": "clip.mp4", "reason": "name does not follow ..."}], "groups": [{"project": "projectx", "site": "ProjectX", "files": [...], "epochs": ["Day1", "Day2", "Day5"], "batched": false}]}`
+
+`batched` is `true` when every consecutive file pair of the project is a leg (not failed) of a batch.
 
 ### GET /api/batches?limit=50
-Most recent first: `[{"id", "site", "name_a", "name_b", "tag_a", "tag_b", "kind_a", "kind_b", "ai_enabled", "status", "stage", "progress", "frames_a", "frames_b", "matched_pairs", "pairs_count", "timings", "warnings", "error_message", "findings_count", "pending_count", "accepted_count", "rejected_count", ...}]`
+Most recent first, one row per project batch: `[{"id", "site", "project", "legs_count", "name_a", "name_b", "tag_a", "tag_b", "kind_a", "kind_b", "ai_enabled", "status", "stage", "progress", "frames_a", "frames_b", "matched_pairs", "pairs_count", "timings", "warnings", "error_message", "findings_count", "pending_count", "accepted_count", "rejected_count", ...}]`
 
-Stages: `"queued"` ➔ `"extracting"` ➔ `"matching"` ➔ `"comparing"` (`progress` = `"3/12"`) ➔ `"done"` | `"error"`.
+`*_a` is the project's first epoch, `*_b` its latest. Stages: `"queued"` ➔ `"extracting"` ➔ `"matching"` ➔
+`"comparing"` (`progress` = `"Day1→Day2 3/12"`) ➔ `"done"` | `"error"`, repeated per leg. The batch is `error` only
+when every leg failed; leg warnings and errors are listed in `warnings`, prefixed by the leg.
 `kind_*` (`image` | `video`) comes from the file content, never the extension.
 
 ### GET /api/batches/{id}
-The batch plus `pairs`: `[{"id", "idx", "frame_a", "frame_b", "time_a", "time_b", "inliers", "overlap", "ssim", "align_quality", "align_method", "change_ratio", "source": "ai"|"cv", "summary", "recommendation", "images": {"image_a_url", "aligned_b_url", "heatmap_url", "annotated_url"}, "findings": [...]}]`.
+The batch plus `legs`: `[{"id", "idx", "tag_a", "tag_b", "name_a", "name_b", "kind_a", "kind_b", "status": "pending"|"running"|"done"|"error", "frames_a", "frames_b", "matched_pairs", "timings", "warnings", "error_message"}]`
+and `pairs` (numbered across the whole batch): `[{"id", "leg_idx", "tag_a", "tag_b", "kind_a", "kind_b", "idx", "frame_a", "frame_b", "time_a", "time_b", "inliers", "overlap", "ssim", "align_quality", "align_method", "change_ratio", "source": "ai"|"cv", "summary", "recommendation", "images": {"image_a_url", "aligned_b_url", "heatmap_url", "annotated_url"}, "findings": [...]}]`.
 A finding: `{"id", "idx", "category", "type", "description", "location_text", "confidence", "box", "sector", "review_status": "pending"|"accepted"|"rejected", "reviewed_at"}`; `box` is in the A frame of its pair.
 
 ### POST /api/batches/{id}/rerun
-Queues the same source files again with the current settings (e.g. AI switched on after a CV-only run) as a new
-batch: `200 {"batch_id": "...", "status": "queued"}`. `404` unknown batch, `409` a source file is gone.
+Queues the same source files (every leg) again with the current settings (e.g. AI switched on after a CV-only run)
+as a new batch: `200 {"batch_id": "...", "status": "queued"}`. `404` unknown batch, `409` a source file is gone.
 
 ### POST /api/findings/{id}/review
 Body `{"status": "accepted" | "rejected" | "pending"}` → the updated finding. `404` unknown finding, `422` other status.
@@ -101,6 +116,8 @@ Body `{"status": "accepted" | "rejected" | "pending"}` → the updated finding. 
 ### GET /api/batches/{id}/report?format=json|html
 Download (`Content-Disposition: attachment`) of the verified change report: accepted findings only, with per-category
 totals. `html` is one self-contained page (annotated frames and before/after crops embedded), printable to PDF.
+The JSON lists the `legs`; each verified change carries its `leg` and `leg_label`. The review dashboard also shows
+this report in place (`[V]`), from the batch detail, without a download.
 
 ## Conventions
 - `box` = `[ymin, xmin, ymax, xmax]`, normalized 0–1000, origin top-left of image A frame (aligned B has A's size).

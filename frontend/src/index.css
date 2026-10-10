@@ -630,3 +630,145 @@ body.theme-light {
   color: var(--accent-active-text);
   border-color: var(--accent-active);
 }
+
+/* Review: inbox project waiting for (automatic) batching */
+.file-status.unbatched {
+  border-style: dashed;
+}
+
+/* Review: in-app verified change report */
+.report-viewer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  z-index: 5;
+}
+
+.report-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: var(--border-width) solid var(--border-main);
+}
+
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.report-body {
+  flex-grow: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.report-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.report-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--fs-data);
+}
+
+.report-table th, .report-table td {
+  border: var(--border-width) solid var(--border-main);
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.report-table th {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+}
+
+.report-totals {
+  max-width: 420px;
+}
+
+.report-empty {
+  min-height: 160px;
+}
+
+.report-leg {
+  border: var(--border-width) solid var(--border-main);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.report-leg-title {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: var(--fs-data);
+  font-weight: 700;
+  border-bottom: var(--border-width) solid var(--border-main);
+  padding-bottom: 4px;
+}
+
+.report-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.report-frames {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.report-frame {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.report-frame-img {
+  position: relative;
+  border: var(--border-width) solid var(--border-main);
+  line-height: 0;
+}
+
+.report-frame-img img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.report-box {
+  position: absolute;
+  border: 2px solid var(--accent-exec);
+  line-height: 1;
+}
+
+.report-box span {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  transform: translateY(-100%);
+  background: var(--accent-exec);
+  color: var(--accent-exec-text);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 3px;
+}

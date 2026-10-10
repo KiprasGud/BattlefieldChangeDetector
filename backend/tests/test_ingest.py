@@ -42,10 +42,10 @@ def test_pairs_follow_epoch_order_not_listing_order():
 
 def test_inbox_pairs_by_name_and_rejects_conflicts(tmp_path):
     inbox = Inbox()
-    assert inbox.add(tmp_path / "Site_A_Day1.mp4") == []
+    assert [m.tag for m in inbox.add(tmp_path / "Site_A_Day1.mp4")] == ["Day1"]  # alone: nothing to batch yet
     assert inbox.snapshot()["waiting"] == ["Site_A_Day1.mp4"]
-    pairs = inbox.add(tmp_path / "site_a_day2.MOV")  # site keys ignore letter case
-    assert [(a.path.name, b.path.name) for a, b in pairs] == [("Site_A_Day1.mp4", "site_a_day2.MOV")]
+    group = inbox.add(tmp_path / "site_a_day2.MOV")  # site keys ignore letter case
+    assert [m.path.name for m in group] == ["Site_A_Day1.mp4", "site_a_day2.MOV"]
     assert inbox.add(tmp_path / "Site_A_Day1.jpg") == []  # same site and epoch, other extension
     assert inbox.add(tmp_path / "notes.txt") == []
     snap = inbox.snapshot()
@@ -53,6 +53,15 @@ def test_inbox_pairs_by_name_and_rejects_conflicts(tmp_path):
     assert {r["name"] for r in snap["rejected"]} == {"Site_A_Day1.jpg", "notes.txt"}
     inbox.remove(tmp_path / "Site_A_Day1.mp4")
     assert inbox.snapshot()["waiting"] == ["site_a_day2.MOV"]
+
+
+def test_inbox_groups_whole_projects_in_epoch_order(tmp_path):
+    inbox = Inbox()
+    for name in ("X_Day5.mp4", "X_Day1.mp4", "Y_Before.jpg", "X_Day2.mp4"):
+        inbox.add(tmp_path / name)
+    assert [[m.tag for m in g] for g in inbox.groups()] == [["Day1", "Day2", "Day5"]]  # Y has no partner yet
+    assert [m.tag for m in inbox.add(tmp_path / "Y_After.jpg")] == ["Before", "After"]
+    assert len(inbox.groups()) == 2
 
 
 # --- media kind by content --------------------------------------------------------------------------

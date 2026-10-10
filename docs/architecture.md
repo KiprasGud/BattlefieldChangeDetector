@@ -30,10 +30,12 @@ Interfaces between stages are in `backend/app/contracts.py`. Each stage ships a 
 ```
  input/Site_A_Day1.mp4 + input/Site_A_Day2.mov          (WATCH_DIR, default <repo>/input)
    │
-   ├─0─ watcher: file settled (2 s quiet, size/mtime unchanged) → name pairing → batch row  (ingest/)
-   │      <key>_<Before|After|DayN>, extension ignored; Day1→Day2→Day3 pair consecutively
-   │      same content pair (sha256 of both files) is never processed twice
-   ├─1─ frames: still image = 1 frame; video → FFmpeg 0.5 fps, long side ≤ 1920, -noautorotate  (video/extract.py)
+   ├─0─ watcher: file settled (2 s quiet, size/mtime unchanged) → name grouping → project batch  (ingest/, batch.py)
+   │      <key>_<Before|After|DayN>, extension ignored; all epochs of one key = one batch, one leg per
+   │      consecutive step (Day1→Day2, Day2→Day5); a later epoch is appended to the same batch as a new leg
+   │      same content pair (sha256 of both files) is never processed twice; finished legs keep their reviews
+   │      AUTO_BATCH=0 / dashboard switch: files stay in the inbox unbatched, the worker pauses
+   ├─1─ per leg, frames: still image = 1 frame; video → FFmpeg 0.5 fps, long side ≤ 1920, -noautorotate  (video/extract.py)
    ├─2─ frame matching (video/match.py): content only, never timestamps
    │      SIFT at 640 px → VLAD retrieval (top 4 B frames per A frame) → SIFT + MAGSAC homography check
    │      → footprint overlap ≥ 0.5 → best B frame per A frame → drop A frames repeating chosen ground
@@ -45,7 +47,12 @@ Interfaces between stages are in `backend/app/contracts.py`. Each stage ships a 
    │    AI_ENABLED=0, no key, MOCK_LLM=1 or Gemini error: heatmap boxes as "unknown_anomaly"
    └─5─ annotate + store pair and findings (SQLite, never auto-pruned) → review dashboard → report
 ```
-- One batch runs at a time (worker thread): the CV work is CPU-bound. A restart re-queues unfinished batches.
+- One batch runs at a time (worker thread): the CV work is CPU-bound; its legs run in order, and legs appended while
+  it runs are picked up before it finishes. A restart re-queues unfinished batches (and their unfinished legs).
+- Automatic batching can be stopped from the dashboard (`PUT /api/settings {"auto_batch": false}`): settled files
+  stay in the inbox unbatched, and the worker finishes the batch it is running, then waits. While stopped,
+  `POST /api/queue/clear` flushes the queue (a re-opened batch only loses its unfinished legs). Starting again
+  batches every project waiting in the inbox and resumes the worker.
 - Gemini cost per batch is bounded: ≤ 1920 px frames are never tiled, so ≤ 2 calls (detection + verification)
   per curated pair, ≤ 2 × `MATCH_MAX_PAIRS` per batch, and nothing for pairs without a CV difference.
 - The heatmap code (`diff/heatmap.py`) is shared and unchanged. Only the batch path fills B's uncovered area with

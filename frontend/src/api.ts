@@ -237,6 +237,11 @@ export interface Finding {
 export interface FramePair {
   id: string;
   batch_id: string;
+  leg_idx: number;
+  tag_a: string; // epochs of the pair's leg, e.g. Day1 -> Day2
+  tag_b: string;
+  kind_a: "image" | "video" | null;
+  kind_b: "image" | "video" | null;
   idx: number;
   frame_a: number;
   frame_b: number;
@@ -255,11 +260,34 @@ export interface FramePair {
   findings: Finding[];
 }
 
+/** One consecutive epoch comparison of a project batch (Day1 -> Day2). */
+export interface Leg {
+  id: string;
+  batch_id: string;
+  idx: number;
+  tag_a: string;
+  tag_b: string;
+  name_a: string;
+  name_b: string;
+  kind_a: "image" | "video" | null;
+  kind_b: "image" | "video" | null;
+  status: "pending" | "running" | "done" | "error";
+  frames_a: number | null;
+  frames_b: number | null;
+  matched_pairs: number | null;
+  timings: Record<string, number>;
+  warnings: string[];
+  error_message: string | null;
+}
+
+/** One project: all of its epochs, as legs. *_a is the first epoch, *_b the latest. */
 export interface Batch {
   id: string;
   created_at: string;
   updated_at: string;
   site: string;
+  project: string;
+  legs_count: number;
   name_a: string;
   name_b: string;
   tag_a: string;
@@ -284,12 +312,15 @@ export interface Batch {
 }
 
 export interface BatchDetail extends Batch {
+  legs: Leg[];
   pairs: FramePair[];
 }
 
 export interface PipelineSettings {
   ai_enabled: boolean;
   ai_available: boolean;
+  auto_batch: boolean; // false: new files stay in the inbox unbatched, the worker is paused
+  queued_count: number;
   watch_enabled: boolean;
   watch_dir: string;
   frame_fps: number;
@@ -303,6 +334,16 @@ export interface InboxState {
   waiting: string[];
   paired: string[];
   rejected: { name: string; reason: string }[];
+  groups: InboxGroup[];
+}
+
+/** A project in the inbox with at least two epochs; batched when all of its legs are in a batch. */
+export interface InboxGroup {
+  project: string;
+  site: string;
+  files: string[];
+  epochs: string[];
+  batched: boolean;
 }
 
 async function getJson<T>(url: string, what: string): Promise<T> {
@@ -326,8 +367,12 @@ export const fetchInbox = () => getJson<InboxState>("/api/inbox", "inbox");
 export const fetchBatches = (limit: number = 50) => getJson<Batch[]>(`/api/batches?limit=${limit}`, "batches");
 export const fetchBatch = (id: string) => getJson<BatchDetail>(`/api/batches/${id}`, `batch ${id}`);
 
-export const updateSettings = (aiEnabled: boolean) =>
-  sendJson<PipelineSettings>("/api/settings", "PUT", { ai_enabled: aiEnabled }, "Settings update failed");
+export const updateSettings = (patch: Partial<Pick<PipelineSettings, "ai_enabled" | "auto_batch">>) =>
+  sendJson<PipelineSettings>("/api/settings", "PUT", patch, "Settings update failed");
+
+/** Flush the batch queue (only while automatic batching is stopped); its files go back to the inbox, unbatched. */
+export const clearQueue = () =>
+  sendJson<{ deleted: string[]; files: string[] }>("/api/queue/clear", "POST", undefined, "Clear queue failed");
 
 export const reviewFinding = (id: string, status: ReviewStatus) =>
   sendJson<Finding>(`/api/findings/${id}/review`, "POST", { status }, "Review failed");

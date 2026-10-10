@@ -34,6 +34,8 @@ def batch_env(tmp_path, monkeypatch):
     inbox.mkdir()
     yield inbox, submitted
     settings.set_ai_enabled(None)
+    settings.set_auto_batch(None)
+    batch.worker.resume()
 
 
 def _drop_stills(inbox: Path, after_name: str = "Spot_After.png") -> None:
@@ -237,3 +239,150 @@ def test_analyze_endpoint_respects_ai_toggle(batch_env):
     assert any("AI step disabled" in w for w in body["warnings"])
     assert body["result"]["changes"] == []  # OpenCV only aligns: no AI, no detections
     assert "heatmap_url" in body["images"]  # the heatmap is still drawn as a visual aid
+
+
+# --- project batches, automatic batching and the queue ----------------------------------------------
+
+def _drop_days(inbox: Path, project: str, days: dict[int, str]) -> None:
+    """Sample stills as <project>_Day<N>.jpg; 'a' / 'b' picks pair01's before / after image."""
+    for day, which in days.items():
+        shutil.copy(SAMPLES / "pair01" / f"{which}.jpg", inbox / f"{project}_Day{day}.jpg")
+
+
+def _register(w: watcher.Watcher, inbox: Path, *names: str) -> list[str]:
+    return [i for n in names for i in w.register(inbox / n, enqueue=False)]
+
+
+def test_project_days_form_one_batch_with_one_leg_per_step(batch_env):
+    inbox, _ = batch_env
+    settings.set_ai_enabled(False)
+    _drop_days(inbox, "ProjectX", {1: "a", 2: "b", 5: "a"})
+    ids = watcher.run_once(inbox)
+    assert len(ids) == 1
+    d = store.batch_detail(ids[0])
+    assert d["status"] == "done", d["error_message"]
+    assert (d["tag_a"], d["tag_b"], d["legs_count"]) == ("Day1", "Day5", 2)
+    assert [(leg["tag_a"], leg["tag_b"], leg["status"]) for leg in d["legs"]] == [
+        ("Day1", "Day2", "done"), ("Day2", "Day5", "done")]
+    assert {(p["leg_idx"], p["tag_a"], p["tag_b"]) for p in d["pairs"]} == {(1, "Day1", "Day2"), (2, "Day2", "Day5")}
+    assert [p["idx"] for p in d["pairs"]] == list(range(1, len(d["pairs"]) + 1))  # pair_NN folders stay unique
+    legs = client.get(f"/api/batches/{d['id']}/report?format=json").json()["legs"]
+    assert [leg["label"] for leg in legs] == ["Day1→Day2", "Day2→Day5"]
+
+
+def test_new_day_extends_the_finished_project_batch(batch_env):
+    inbox, _ = batch_env
+    settings.set_ai_enabled(False)
+    _drop_days(inbox, "ProjectX", {1: "a", 2: "b"})
+    w = watcher.Watcher(inbox)
+    [batch_id] = _register(w, inbox, "ProjectX_Day1.jpg", "ProjectX_Day2.jpg")
+    batch.process_batch(batch_id)
+    first = store.batch_detail(batch_id)["pairs"][0]["findings"][0]
+    store.set_review(first["id"], "accepted")
+
+    _drop_days(inbox, "ProjectX", {5: "a"})
+    assert _register(w, inbox, "ProjectX_Day5.jpg") == [batch_id]  # same batch, re-opened
+    row = store.get_batch(batch_id)
+    assert (row["status"], row["tag_b"], row["legs_count"]) == ("queued", "Day5", 2)
+    batch.process_batch(batch_id)
+    d = store.batch_detail(batch_id)
+    assert d["status"] == "done" and [leg["status"] for leg in d["legs"]] == ["done", "done"]
+    kept = [f for p in d["pairs"] for f in p["findings"] if f["id"] == first["id"]]
+    assert kept and kept[0]["review_status"] == "accepted"
+    assert _register(w, inbox, "ProjectX_Day5.jpg") == []  # nothing new
+    assert len(store.list_batches()) == 1
+
+
+def test_stopped_auto_batching_keeps_files_in_the_inbox(batch_env, monkeypatch):
+    inbox, submitted = batch_env
+    _drop_days(inbox, "ProjectX", {1: "a", 2: "b"})
+    w = watcher.Watcher(inbox)
+    monkeypatch.setattr(watcher, "_service", w)
+    r = client.put("/api/settings", json={"auto_batch": False})
+    assert r.json()["auto_batch"] is False and r.json()["ai_enabled"] == settings.ai_enabled()
+    assert batch.worker.paused
+    assert _register(w, inbox, "ProjectX_Day1.jpg", "ProjectX_Day2.jpg") == []
+    assert store.list_batches() == []
+    groups = client.get("/api/inbox").json()["groups"]
+    assert [(g["site"], g["epochs"], g["batched"]) for g in groups] == [("ProjectX", ["Day1", "Day2"], False)]
+
+    assert client.put("/api/settings", json={"auto_batch": True}).json()["auto_batch"] is True
+    assert not batch.worker.paused
+    assert len(submitted) == 1 and store.get_batch(submitted[0])["legs_count"] == 1
+    assert client.get("/api/inbox").json()["groups"][0]["batched"] is True
+
+
+def test_clear_queue_only_when_stopped_and_keeps_finished_legs(batch_env, monkeypatch):
+    inbox, _ = batch_env
+    settings.set_ai_enabled(False)
+    _drop_days(inbox, "ProjectX", {1: "a", 2: "b"})
+    _drop_days(inbox, "ProjectY", {1: "a", 2: "b"})
+    w = watcher.Watcher(inbox)
+    monkeypatch.setattr(watcher, "_service", w)
+    [x] = _register(w, inbox, "ProjectX_Day1.jpg", "ProjectX_Day2.jpg")
+    batch.process_batch(x)
+    accepted = store.batch_detail(x)["pairs"][0]["findings"][0]["id"]
+    store.set_review(accepted, "accepted")
+    _drop_days(inbox, "ProjectX", {5: "a"})
+    assert _register(w, inbox, "ProjectX_Day5.jpg") == [x]               # re-opened: queued again
+    [y] = _register(w, inbox, "ProjectY_Day1.jpg", "ProjectY_Day2.jpg")  # fresh: queued
+    assert client.get("/api/settings").json()["queued_count"] == 2
+
+    assert client.post("/api/queue/clear").status_code == 409           # automatic batching still on
+    client.put("/api/settings", json={"auto_batch": False})
+    r = client.post("/api/queue/clear")
+    assert r.status_code == 200 and r.json()["deleted"] == [y]
+    assert set(r.json()["files"]) == {"ProjectX_Day2.jpg", "ProjectX_Day5.jpg", "ProjectY_Day1.jpg", "ProjectY_Day2.jpg"}
+    assert store.get_batch(y) is None
+    row = store.batch_detail(x)
+    assert (row["status"], row["tag_b"], row["legs_count"]) == ("done", "Day2", 1)
+    assert any(f["id"] == accepted and f["review_status"] == "accepted" for p in row["pairs"] for f in p["findings"])
+    assert client.get("/api/settings").json()["queued_count"] == 0
+    assert [g["batched"] for g in client.get("/api/inbox").json()["groups"]] == [False, False]
+    batch.process_batch(y)  # a cleared id still in the worker's queue is skipped
+    assert store.get_batch(y) is None
+
+
+def test_paused_worker_holds_queued_batches(monkeypatch):
+    import threading
+
+    ran = threading.Event()
+    monkeypatch.setattr(batch, "process_batch", lambda batch_id: ran.set())
+    w = batch.BatchWorker()
+    w.pause()
+    w.submit("b1")
+    assert not ran.wait(0.3)
+    w.resume()
+    assert ran.wait(5)
+
+
+def test_old_database_gets_one_leg_per_batch(tmp_path, monkeypatch):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE batches (id TEXT PRIMARY KEY, created_at TEXT, updated_at TEXT, site TEXT, name_a TEXT,
+                name_b TEXT, tag_a TEXT, tag_b TEXT, path_a TEXT, path_b TEXT, kind_a TEXT, kind_b TEXT,
+                signature TEXT, ai_enabled INTEGER, status TEXT, stage TEXT, progress TEXT, frames_a INTEGER,
+                frames_b INTEGER, matched_pairs INTEGER, pairs_count INTEGER, timings_json TEXT, warnings_json TEXT,
+                error_message TEXT);
+            CREATE TABLE frame_pairs (id TEXT PRIMARY KEY, batch_id TEXT, idx INTEGER, frame_a INTEGER,
+                frame_b INTEGER, time_a REAL, time_b REAL, inliers INTEGER, overlap REAL, ssim REAL,
+                align_quality REAL, align_method TEXT, change_ratio REAL, source TEXT, summary TEXT,
+                recommendation TEXT, images_json TEXT);
+            INSERT INTO batches (id, created_at, site, name_a, name_b, tag_a, tag_b, status, timings_json,
+                warnings_json) VALUES ('old1', '2026-01-01', 'Site_A', 'Site_A_Day1.mp4', 'Site_A_Day2.mp4', 'Day1',
+                'Day2', 'done', '{}', '[]');
+            INSERT INTO frame_pairs (id, batch_id, idx, images_json) VALUES ('p1', 'old1', 1, '{}');
+            """
+        )
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", path)
+    store.init_batch_db()
+    store.init_batch_db()  # idempotent
+    d = store.batch_detail("old1")
+    assert d["project"] == "site_a" and d["legs_count"] == 1
+    assert [(leg["tag_a"], leg["tag_b"], leg["status"]) for leg in d["legs"]] == [("Day1", "Day2", "done")]
+    assert (d["pairs"][0]["leg_idx"], d["pairs"][0]["tag_a"]) == (1, "Day1")

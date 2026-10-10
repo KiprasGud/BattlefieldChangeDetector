@@ -1,4 +1,5 @@
-"""Watch the input folder: files that finished copying are paired by name and queued as batches.
+"""Watch the input folder: files that finished copying are grouped by name and queued as one batch per project
+(AUTO_BATCH=0 or the dashboard switch keeps them in the inbox, unbatched).
 
 Runs inside the API (FastAPI lifespan, WATCH_ENABLED=1, the default) or headless. Use one or the other:
     python -m app.ingest.watcher [FOLDER]          # watch WATCH_DIR (or FOLDER) until Ctrl+C
@@ -19,7 +20,7 @@ except ImportError:  # optional: the API still runs, only the watch folder is of
     FileSystemEvent = FileSystemEventHandler = object
     Observer = None
 
-from .. import batch
+from .. import batch, settings
 from ..storage.batches import init_batch_db
 from .media import content_hash
 from .naming import Inbox
@@ -125,20 +126,35 @@ class Watcher:
         return created
 
     def register(self, path, enqueue: bool = True) -> list[str]:
-        """Add a finished file to the inbox; create a batch for every pair of its site not processed yet."""
+        """Add a finished file to the inbox; while automatic batching is on, put its site's legs not processed yet
+        into the project's batch. Returns the ids of the batches this queued."""
+        group = self.inbox.add(path)
+        if not settings.auto_batch_enabled():
+            return []
+        return self._queue(group, enqueue)
+
+    def batch_waiting(self, enqueue: bool = True) -> list[str]:
+        """Batch every project waiting in the inbox (automatic batching switched back on, or a one-off run)."""
         created = []
-        for a, b in self.inbox.add(path):
-            try:
-                batch_id = batch.create_pair_batch(a, b, self._hash(a.path), self._hash(b.path))
-            except OSError as e:
-                log.warning("Cannot read %s / %s: %s", a.path.name, b.path.name, e)
-                continue
-            if batch_id:
-                log.info("Queued batch %s: %s -> %s", batch_id, a.path.name, b.path.name)
-                created.append(batch_id)
-                if enqueue:
-                    batch.worker.submit(batch_id)
+        for group in self.inbox.groups():
+            created += self._queue(group, enqueue)
         return created
+
+    def _queue(self, group: list, enqueue: bool) -> list[str]:
+        if len(group) < 2:
+            return []
+        try:
+            hashes = {m.path: self._hash(m.path) for m in group}
+        except OSError as e:
+            log.warning("Cannot read %s: %s", ", ".join(m.path.name for m in group), e)
+            return []
+        batch_id = batch.queue_project(group, hashes)
+        if not batch_id:
+            return []
+        log.info("Queued batch %s: %s", batch_id, " -> ".join(m.path.name for m in group))
+        if enqueue:
+            batch.worker.submit(batch_id)
+        return [batch_id]
 
     def _hash(self, path: Path) -> str:
         with self._lock:
@@ -197,10 +213,10 @@ def service() -> Optional[Watcher]:
 def run_once(folder) -> list[str]:
     """Pair and process every file in the folder now, without waiting for copies to settle."""
     w = Watcher(folder)
-    ids = []
     for path in sorted(w.folder.iterdir()):
         if path.is_file() and not _ignored(path):
-            ids += w.register(path, enqueue=False)
+            w.inbox.add(path)
+    ids = w.batch_waiting(enqueue=False)  # all files first: one project, one batch with all of its legs
     for batch_id in ids:
         batch.process_batch(batch_id)
     return ids
@@ -221,6 +237,7 @@ def main() -> None:
         ids = run_once(folder)
         print(f"Processed {len(ids)} batch(es): {', '.join(ids) or '-'}")
         return
+    batch.sync_worker()
     batch.resume_interrupted()
     start_service(folder)
     try:
