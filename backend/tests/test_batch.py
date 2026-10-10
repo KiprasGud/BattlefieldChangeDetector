@@ -235,5 +235,5 @@ def test_analyze_endpoint_respects_ai_toggle(batch_env):
     assert r.status_code == 200
     body = r.json()
     assert any("AI step disabled" in w for w in body["warnings"])
-    assert body["result"]["changes"]
-    assert all(c["category"] == "unknown_anomaly" for c in body["result"]["changes"])
+    assert body["result"]["changes"] == []  # OpenCV only aligns: no AI, no detections
+    assert "heatmap_url" in body["images"]  # the heatmap is still drawn as a visual aid

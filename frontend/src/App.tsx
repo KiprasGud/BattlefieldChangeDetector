@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { analyze, checkHealth, CancelledError, type JobProgress } from "./api";
+import { analyze, checkHealth, fetchPresets, CancelledError, type JobProgress, type Preset } from "./api";
 import type { AnalyzeResponse } from "./types";
 import ResultViewer from "./components/ResultViewer";
 import ReviewDashboard from "./components/ReviewDashboard";
@@ -7,6 +7,12 @@ import ReviewDashboard from "./components/ReviewDashboard";
 const HEALTH_INTERVAL_MS = 15000;
 
 type View = "analyze" | "review";
+type Theme = "dark" | "light" | "nvg";
+
+const isTyping = (t: EventTarget | null) => {
+  const el = t as HTMLElement | null;
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
+};
 
 export default function App() {
   // "#review" opens the review dashboard directly (bookmarkable).
@@ -20,25 +26,29 @@ export default function App() {
   const [stage, setStage] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [backendUp, setBackendUp] = useState<boolean | null>(null);
-  
+  const [theme, setTheme] = useState<Theme>("dark");
+
   // Tactical State
   const [fileA, setFileA] = useState<File | null>(null);
   const [fileB, setFileB] = useState<File | null>(null);
+  // Pre-made target classes (ids from GET /api/presets); the backend expands each into an AI instruction.
+  const [presets, setPresets] = useState<Preset[]>([]);
   const [criteria, setCriteria] = useState<string[]>(["vehicles"]);
   const [customQuery, setCustomQuery] = useState<string>("");
 
   const toggleCriteria = (val: string) => {
-    setCriteria(prev => 
+    setCriteria(prev =>
       prev.includes(val) ? prev.filter(c => c !== val) : [...prev, val]
     );
   };
   const [logs, setLogs] = useState<string[]>(["[SYS] Terminal initialized."]);
   const [selectedChangeIdx, setSelectedChangeIdx] = useState<number | null>(null);
-  
+
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const queryRef = useRef<HTMLInputElement>(null);
   const runId = useRef(0);
   const purgeArmedTime = useRef<number>(0);
-  
+
   const [inspectorVisible, setInspectorVisible] = useState(false);
   const [xmlPreview, setXmlPreview] = useState<string>("");
 
@@ -51,6 +61,16 @@ export default function App() {
       logsEndRef.current.scrollIntoView({ behavior: "instant" });
     }
   }, [logs]);
+
+  useEffect(() => {
+    document.body.className = theme === "dark" ? "" : `theme-${theme}`;
+  }, [theme]);
+
+  useEffect(() => {
+    fetchPresets()
+      .then(setPresets)
+      .catch((e) => addLog(`[ERR] TARGET CLASSES UNAVAILABLE: ${e?.message || e}`));
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -89,63 +109,88 @@ export default function App() {
     }
   };
 
+  const toggleLight = () => {
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    addLog(`[SYS] ${next.toUpperCase()} MODE ENGAGED.`);
+  };
+
+  const toggleNvg = () => {
+    const next = theme === "nvg" ? "dark" : "nvg";
+    setTheme(next);
+    addLog(next === "nvg" ? "[SYS] NIGHT VISION (NVG) MODE ENGAGED." : "[SYS] DARK MODE ENGAGED.");
+  };
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.altKey && e.key.toLowerCase() === "r") {
+      const key = e.key.toLowerCase();
+      if (e.altKey && key === "n") {
+        e.preventDefault();
+        toggleNvg();
+      } else if (e.altKey && key === "s") {
+        e.preventDefault();
+        toggleLight();
+      } else if (e.altKey && key === "r") {
         e.preventDefault();
         setView("review");
-      } else if (e.altKey && e.key.toLowerCase() === "a") {
+      } else if (e.altKey && key === "a") {
         e.preventDefault();
         setView("analyze");
-      } else if (view === "analyze" && (e.key === "F5" || (e.ctrlKey && e.key === "Enter"))) {
+      } else if (view !== "analyze") {
+        return;
+      } else if (e.key === "F5" || (e.ctrlKey && e.key === "Enter")) {
         e.preventDefault();
         handleExecute();
-      } else if (view === "analyze" && e.key === "Escape") {
+      } else if (e.key === "Escape") {
         e.preventDefault();
         handlePurge();
-      } else if (e.altKey && e.key.toLowerCase() === 'n') {
+      } else if (e.altKey && /^Digit[1-9]$/.test(e.code)) {
+        const preset = presets[Number(e.code.slice(5)) - 1];
+        if (!preset) return;
         e.preventDefault();
-        document.body.className = "theme-nvg";
-        addLog("[SYS] NIGHT VISION (NVG) MODE ENGAGED.");
-      } else if (e.altKey && e.key.toLowerCase() === 's') {
+        toggleCriteria(preset.id);
+      } else if (e.altKey && key === "b") {
         e.preventDefault();
-        document.body.className = "theme-sun";
-        addLog("[SYS] HIGH-CONTRAST DAYLIGHT MODE ENGAGED.");
+        document.getElementById("file-a")?.click();
+      } else if (e.altKey && key === "c") {
+        e.preventDefault();
+        document.getElementById("file-b")?.click();
+      } else if (e.altKey && key === "x") {
+        e.preventDefault();
+        handleExportXML();
+      } else if (e.altKey && key === "j") {
+        e.preventDefault();
+        handleExportJSON();
+      } else if (e.altKey && key === "i") {
+        e.preventDefault();
+        setInspectorVisible(v => !v);
+      } else if (e.key === "/" && !isTyping(e.target)) {
+        e.preventDefault();
+        queryRef.current?.focus();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  const handleDropA = (e: React.DragEvent) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (file) {
-      if (!file.type.startsWith("image/")) {
-        addLog(`[ERR] BASELINE INGEST FAILED. INVALID FORMAT.`);
-        return;
-      }
-      setFileA(file);
-      addLog(`[INGEST] Baseline loaded: ${file.name}`);
+  const ingest = (file: File | undefined, label: "Baseline" | "Recon", set: (f: File) => void) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      addLog(`[ERR] ${label.toUpperCase()} INGEST FAILED. INVALID FORMAT.`);
+      return;
     }
-  };
-
-  const handleDropB = (e: React.DragEvent) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files?.[0];
-    if (file) {
-      if (!file.type.startsWith("image/")) {
-        addLog(`[ERR] RECON INGEST FAILED. INVALID FORMAT.`);
-        return;
-      }
-      setFileB(file);
-      addLog(`[INGEST] Recon loaded: ${file.name}`);
-    }
+    set(file);
+    addLog(`[INGEST] ${label} loaded: ${file.name}`);
   };
 
   const handleExecute = async () => {
     if (!fileA || !fileB) {
       addLog("[ERR] Missing imagery for execution.");
+      return;
+    }
+    const query = customQuery.trim();
+    if (!criteria.length && !query) {
+      addLog("[ERR] No target class selected and no custom query.");
       return;
     }
     const myRun = ++runId.current;
@@ -154,15 +199,13 @@ export default function App() {
     setLoading(true);
     setError(null);
     setData(null);
+    setSelectedChangeIdx(null);
     setStage("queued");
-    addLog("[EXEC] Initiating diff engine sequence...");
-
-    const activeCriteria = customQuery.trim() ? [...criteria, customQuery.trim()] : criteria;
-    const criteriaPayload = JSON.stringify(activeCriteria);
+    addLog(`[EXEC] AI scan: ${[...criteria, ...(query ? ["custom query"] : [])].join(", ")}`);
 
     try {
       const response = await analyze(
-        fileA, fileB, criteriaPayload, "en", false,
+        fileA, fileB, { presets: criteria, query }, "en", false,
         (progress: JobProgress) => {
           setStage(progress.stage);
           addLog(`[PROC] Stage advanced: ${progress.stage}`);
@@ -171,6 +214,7 @@ export default function App() {
       );
       if (isCancelled()) return;
       setData(response);
+      response.warnings?.forEach(w => addLog(`[WARN] ${w}`));
       addLog(`[SUCCESS] Analysis complete. Targets found: ${response.result.changes.length}`);
     } catch (e: any) {
       if (e instanceof CancelledError || isCancelled()) return;
@@ -196,8 +240,8 @@ export default function App() {
     let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<events>\n`;
     data.result.changes.forEach((c, i) => {
       const uid = `ZVALGAS-${data.job_id}-TRGT-${i+1}`;
-      // Mock CoT type classification based on 'vehicles' string or just default to hostile ground 'a-h-G'
-      const cotType = criteria.some(c => c.toLowerCase().includes("vehicle")) ? "a-h-G-U-C" : "a-h-G";
+      // CoT type: hostile ground unit when vehicle classes were searched, generic hostile ground otherwise
+      const cotType = criteria.includes("vehicles") || criteria.includes("tracks") ? "a-h-G-U-C" : "a-h-G";
       xml += `  <event version="2.0" uid="${uid}" type="${cotType}" time="${timeStr}" start="${timeStr}" stale="${staleStr}" how="m-g">\n`;
       xml += `    <point lat="0.0" lon="0.0" hae="0.0" ce="9999" le="9999" />\n`;
       xml += `    <detail>\n`;
@@ -246,6 +290,24 @@ export default function App() {
     return <ReviewDashboard onExit={() => setView("analyze")} />;
   }
 
+  const dropzone = (id: string, label: "Baseline" | "Recon", file: File | null, set: (f: File) => void) => (
+    <div
+      className="tactical-dropzone"
+      onDragOver={e => e.preventDefault()}
+      onDrop={e => {
+        e.preventDefault();
+        ingest(e.dataTransfer.files?.[0], label, set);
+      }}
+      onClick={() => document.getElementById(id)?.click()}
+    >
+      <span className="dropzone-label">{file ? file.name : "DRAG & DROP OR CLICK"}</span>
+      <input type="file" id={id} accept="image/*" hidden onChange={e => {
+        ingest(e.target.files?.[0], label, set);
+        e.target.value = "";
+      }} />
+    </div>
+  );
+
   return (
     <div className="terminal-layout">
       {/* LEFT PANE: INGESTION & PARAMETERS */}
@@ -256,7 +318,7 @@ export default function App() {
             {backendUp ? "UPLINK: OK" : "UPLINK: FAIL"}
           </div>
         </div>
-        
+
         <div className="pane-content">
           <div className="toggle-grid">
             <button className="tactical-toggle active">[ALT+A] ANALYZE</button>
@@ -264,76 +326,37 @@ export default function App() {
           </div>
 
           <div className="control-group">
-            <div className="control-label">1. BASELINE (PAST)</div>
-            <div 
-              className="tactical-dropzone" 
-              onDragOver={e => e.preventDefault()} 
-              onDrop={handleDropA}
-              onClick={() => document.getElementById("file-a")?.click()}
-            >
-              <span className="dropzone-label">{fileA ? fileA.name : "DRAG & DROP OR CLICK"}</span>
-              <input type="file" id="file-a" hidden onChange={e => {
-                if (e.target.files?.[0]) {
-                  setFileA(e.target.files[0]);
-                  addLog(`[INGEST] Baseline: ${e.target.files[0].name}`);
-                }
-              }} />
+            <div className="control-label">1. BASELINE (PAST) <span className="mono">[ALT+B]</span></div>
+            {dropzone("file-a", "Baseline", fileA, setFileA)}
+          </div>
+
+          <div className="control-group">
+            <div className="control-label">2. RECON (CURRENT) <span className="mono">[ALT+C]</span></div>
+            {dropzone("file-b", "Recon", fileB, setFileB)}
+          </div>
+
+          <div className="control-group">
+            <div className="control-label">TARGET CRITERIA (AI)</div>
+            <div className="toggle-grid">
+              {presets.map((p) => (
+                <button
+                  key={p.id}
+                  className={`tactical-toggle preset-toggle ${criteria.includes(p.id) ? "active" : ""}`}
+                  aria-pressed={criteria.includes(p.id)}
+                  onClick={() => toggleCriteria(p.id)}
+                >
+                  <span className="mono">[{p.shortcut.toUpperCase()}]</span> {p.label.toUpperCase()}
+                </button>
+              ))}
             </div>
           </div>
 
           <div className="control-group">
-            <div className="control-label">2. RECON (CURRENT)</div>
-            <div 
-              className="tactical-dropzone" 
-              onDragOver={e => e.preventDefault()} 
-              onDrop={handleDropB}
-              onClick={() => document.getElementById("file-b")?.click()}
-            >
-              <span className="dropzone-label">{fileB ? fileB.name : "DRAG & DROP OR CLICK"}</span>
-              <input type="file" id="file-b" hidden onChange={e => {
-                if (e.target.files?.[0]) {
-                  setFileB(e.target.files[0]);
-                  addLog(`[INGEST] Recon: ${e.target.files[0].name}`);
-                }
-              }} />
-            </div>
-          </div>
-
-          <div className="control-group" style={{ marginTop: "16px" }}>
-            <div className="control-label">TARGET CRITERIA</div>
-            <div className="toggle-grid">
-              <button 
-                className={`tactical-toggle ${criteria.includes("vehicles") ? "active" : ""}`}
-                onClick={() => toggleCriteria("vehicles")}
-              >
-                VEHICLES
-              </button>
-              <button 
-                className={`tactical-toggle ${criteria.includes("craters") ? "active" : ""}`}
-                onClick={() => toggleCriteria("craters")}
-              >
-                CRATERS
-              </button>
-              <button 
-                className={`tactical-toggle ${criteria.includes("felled trees") ? "active" : ""}`}
-                onClick={() => toggleCriteria("felled trees")}
-              >
-                TRENCHES / TREES
-              </button>
-              <button 
-                className={`tactical-toggle ${criteria.includes("buildings") ? "active" : ""}`}
-                onClick={() => toggleCriteria("buildings")}
-              >
-                STRUCTURES
-              </button>
-            </div>
-          </div>
-
-          <div className="control-group" style={{ marginTop: "16px" }}>
-            <div className="control-label">CUSTOM QUERY (OPTIONAL)</div>
-            <input 
-              type="text" 
-              className="tactical-input" 
+            <div className="control-label">CUSTOM QUERY (OPTIONAL) <span className="mono">[/]</span></div>
+            <input
+              ref={queryRef}
+              type="text"
+              className="tactical-input"
               placeholder="e.g. 'destroyed artillery'"
               value={customQuery}
               onChange={(e) => setCustomQuery(e.target.value)}
@@ -342,14 +365,14 @@ export default function App() {
 
           <div style={{ flexGrow: 1 }} />
 
-          <button 
+          <button
             className={`btn-exec ${loading ? "active" : ""}`}
             onClick={handleExecute}
-            disabled={loading || !fileA || !fileB}
+            disabled={loading || !fileA || !fileB || (!criteria.length && !customQuery.trim())}
             style={loading ? { background: "var(--accent-active)", color: "var(--accent-active-text)", borderColor: "var(--accent-active)" } : {}}
           >
             <span>{loading ? `[PROCESSING...]` : "EXECUTE"}</span>
-            <span className="shortcut-key" style={loading ? { borderColor: "var(--accent-active-text)" } : {}}>[F5] / [CTRL+ENTER]</span>
+            <span className="shortcut-key">[F5] / [CTRL+ENTER]</span>
           </button>
         </div>
       </aside>
@@ -359,28 +382,28 @@ export default function App() {
         <div className="pane-header">
           <div className="pane-title">DIFF ENGINE // WORKSPACE</div>
           {data && (
-             <div className="fs-xs mono text-warn">
+             <div className="fs-xs mono">
                TARGETS FOUND: {data.result.changes.length}
              </div>
           )}
         </div>
-        
+
         <div className="pane-content" style={{ padding: 0 }}>
           {loading ? (
-            <div className="wireframe-placeholder text-warn">
+            <div className="wireframe-placeholder">
               <div>PROCESSING...</div>
               <div className="fs-xs mono">STAGE: {stage}</div>
             </div>
           ) : data ? (
-            <ResultViewer 
-              data={data} 
-              selectedIndex={selectedChangeIdx} 
-              onSelectIndex={setSelectedChangeIdx} 
+            <ResultViewer
+              data={data}
+              selectedIndex={selectedChangeIdx}
+              onSelectIndex={setSelectedChangeIdx}
             />
           ) : (
             <div className="wireframe-placeholder">
               <div className="wireframe-grid"></div>
-              <div>AWAITING SENSOR INGESTION</div>
+              <div>{error ? <span className="text-danger">EXECUTION FAILED: SEE SYSTEM LOGS</span> : "AWAITING SENSOR INGESTION"}</div>
             </div>
           )}
         </div>
@@ -390,9 +413,16 @@ export default function App() {
       <aside className="pane">
         <div className="pane-header">
           <div className="pane-title">TELEMETRY // OUTPUT</div>
-          <div className="fs-xs mono text-dim">REC: ON</div>
+          <div className="header-actions">
+            <button className={`header-btn ${theme === "light" ? "active" : ""}`} onClick={toggleLight}>
+              [ALT+S] {theme === "light" ? "DARK" : "LIGHT"}
+            </button>
+            <button className={`header-btn ${theme === "nvg" ? "active" : ""}`} onClick={toggleNvg}>
+              [ALT+N] NVG
+            </button>
+          </div>
         </div>
-        
+
         <div className="pane-content">
           <div className="control-group">
             <div className="control-label">COORDINATE READOUT</div>
@@ -401,7 +431,7 @@ export default function App() {
                 <>
                   <div className="log-entry">
                     <span className="log-time">TRGT-ID:</span>
-                    <span className="text-warn">TRGT-{String(selectedChangeIdx + 1).padStart(2, '0')}</span>
+                    <span>TRGT-{String(selectedChangeIdx + 1).padStart(2, '0')}</span>
                   </div>
                   <div className="log-entry">
                     <span className="log-time">BOUNDS:</span>
@@ -423,7 +453,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="control-group" style={{ flexGrow: 1, marginTop: "8px" }}>
+          <div className="control-group" style={{ flexGrow: 1 }}>
             <div className="control-label">SYSTEM LOGS</div>
             <div className="log-container">
               {logs.map((l, i) => {
@@ -440,15 +470,12 @@ export default function App() {
             </div>
           </div>
 
-          <div className="control-group" style={{ marginTop: "16px" }}>
-            <div className="control-label" style={{ display: "flex", justifyContent: "space-between" }}>
+          <div className="control-group">
+            <div className="control-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span>EXPORT PIPELINE</span>
-              <span 
-                style={{ cursor: "pointer", color: inspectorVisible ? "var(--accent-exec)" : "var(--text-dim)" }} 
-                onClick={() => setInspectorVisible(!inspectorVisible)}
-              >
-                [INSPECT]
-              </span>
+              <button className={`header-btn ${inspectorVisible ? "active" : ""}`} onClick={() => setInspectorVisible(!inspectorVisible)}>
+                [ALT+I] INSPECT
+              </button>
             </div>
 
             {inspectorVisible && data && (
@@ -458,21 +485,19 @@ export default function App() {
             )}
 
             <div style={{ display: "flex", gap: "4px" }}>
-              <button 
-                className="btn-exec" 
-                style={{ flex: 1, padding: "8px", fontSize: "12px" }} 
-                disabled={!data} 
+              <button
+                className="btn-exec btn-compact"
+                disabled={!data}
                 onClick={handleExportXML}
               >
-                XML (CoT)
+                [ALT+X] XML (CoT)
               </button>
-              <button 
-                className="btn-exec" 
-                style={{ flex: 1, padding: "8px", fontSize: "12px" }} 
-                disabled={!data} 
+              <button
+                className="btn-exec btn-compact"
+                disabled={!data}
                 onClick={handleExportJSON}
               >
-                JSON
+                [ALT+J] JSON
               </button>
             </div>
           </div>

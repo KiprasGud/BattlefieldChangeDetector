@@ -19,6 +19,7 @@ from pydantic import BaseModel  # noqa: E402
 
 from . import batch, pipeline, settings  # noqa: E402
 from .analysis import use_mock  # noqa: E402
+from .analysis.presets import build_criteria, catalog, parse_ids  # noqa: E402
 from .contracts import AnalyzeResponse  # noqa: E402
 from .ingest import SCHEME, watcher  # noqa: E402
 from .render import report  # noqa: E402
@@ -86,6 +87,12 @@ SAMPLE_METADATA = {
         "criteria": "Vehicle activity, barrier breaches, felled trees",
     },
 }
+
+
+@app.get("/api/presets")
+def list_presets():
+    """Pre-made target classes for the criteria toggles; their instructions stay server-side."""
+    return catalog()
 
 
 @app.get("/api/samples")
@@ -174,14 +181,20 @@ def _run_job_worker(
 async def analyze_endpoint(
     image_a: UploadFile = File(...),
     image_b: UploadFile = File(...),
-    criteria: str = Form(...),
+    criteria: str = Form(""),
+    presets: str = Form(""),
     lang: str = Form("en"),
     draw_grid: bool = Form(False),
     sync: bool = Query(False),
 ):
-    cleaned_criteria = criteria.strip()
+    """criteria: the operator's free-text query; presets: comma-separated target class ids (GET /api/presets).
+    Both become one written instruction for the AI model."""
+    try:
+        cleaned_criteria = build_criteria(parse_ids(presets), criteria)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not cleaned_criteria:
-        raise HTTPException(status_code=400, detail="Search criteria cannot be empty.")
+        raise HTTPException(status_code=400, detail="Search criteria cannot be empty: select a target class or enter a query.")
 
     if lang not in ("en", "lt"):
         raise HTTPException(status_code=400, detail="Invalid language: must be 'en' or 'lt'.")

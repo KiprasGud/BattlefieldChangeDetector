@@ -9,8 +9,17 @@
 ## GET /api/samples/{pair_id}/{filename}
 Streams demo sample image (e.g. `pair01/a.jpg`).
 
+## GET /api/presets
+Pre-made target classes for the criteria toggles.
+`200 [{"id": "craters", "label": "Craters / Artillery Impacts", "shortcut": "Alt+2"}, ...]`
+Ids: `wires`, `craters`, `trenches`, `tracks`, `camouflage`, `damage`, `vehicles`, `felled_trees`.
+
 ## POST /api/analyze
-multipart/form-data: `image_a` (past), `image_b` (present), `criteria` (text), `lang` (optional, `en`|`lt`), `draw_grid` (optional, `true`|`false`).
+multipart/form-data: `image_a` (past), `image_b` (present), `criteria` (optional free-text query), `presets` (optional,
+comma-separated ids from `/api/presets`), `lang` (optional, `en`|`lt`), `draw_grid` (optional, `true`|`false`).
+At least one of `criteria` / `presets` is required. Each preset is expanded server-side into a written visual
+instruction and bundled with the free-text query into one criteria block for the AI model (the stored job `criteria`
+is that block). OpenCV only aligns the images: it never detects. With the AI step off, no detections are returned.
 Query parameter: `sync` (optional boolean, default `false`).
 
 - **Asynchronous (default)**: Returns `200` with:

@@ -84,17 +84,37 @@ export function jobToResponse(job: JobHistoryItem): AnalyzeResponse {
   };
 }
 
+/** What to detect: pre-made target class ids (GET /api/presets) and/or a free-text query. The backend turns
+ *  both into one written instruction for the AI model. */
+export interface Criteria {
+  presets: string[];
+  query: string;
+}
+
+export interface Preset {
+  id: string;
+  label: string;
+  shortcut: string;
+}
+
+export async function fetchPresets(): Promise<Preset[]> {
+  const res = await request("/api/presets");
+  if (!res.ok) throw new Error(await errorMessage(res, "Failed to load target classes"));
+  return res.json();
+}
+
 export async function submitJob(
   a: File | Blob,
   b: File | Blob,
-  criteria: string,
+  criteria: Criteria,
   lang: string = "en",
   drawGrid: boolean = false
 ): Promise<string> {
   const form = new FormData();
   form.append("image_a", a, a instanceof File ? a.name : "image_a.jpg");
   form.append("image_b", b, b instanceof File ? b.name : "image_b.jpg");
-  form.append("criteria", criteria);
+  form.append("presets", criteria.presets.join(","));
+  form.append("criteria", criteria.query);
   form.append("lang", lang);
   form.append("draw_grid", drawGrid ? "true" : "false");
 
@@ -157,7 +177,7 @@ export class CancelledError extends Error {
 export async function analyze(
   a: File | Blob,
   b: File | Blob,
-  criteria: string,
+  criteria: Criteria,
   lang: string = "en",
   drawGrid: boolean = false,
   onProgress?: (progress: JobProgress) => void,

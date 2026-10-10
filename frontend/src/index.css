@@ -3,19 +3,17 @@
   --bg-app: #111827;
   --bg-panel: #111827;
   --border-main: #374151;
-  
+
   --text-main: #F9FAFB;
   --text-dim: #9CA3AF;
-  
+
   --accent-exec: #10B981;
   --accent-exec-text: #000000;
-  
-  --accent-warn: #F59E0B;
-  --accent-warn-text: #000000;
-  
+
+
   --accent-danger: #EF4444;
   --accent-danger-text: #000000;
-  
+
   --accent-active: #F9FAFB; /* Inverted for active states */
   --accent-active-text: #111827;
 
@@ -25,6 +23,7 @@
 
   /* Structural */
   --border-width: 1px;
+  --fs-data: 0.75rem; /* UI.md §3: 12px default data size */
 }
 
 * {
@@ -40,6 +39,7 @@ body {
   background-color: var(--bg-app);
   color: var(--text-main);
   font-family: var(--font-sans);
+  font-size: var(--fs-data);
   line-height: 1.4;
   height: 100vh;
   width: 100vw;
@@ -52,10 +52,10 @@ body {
 .sans { font-family: var(--font-sans); }
 .text-dim { color: var(--text-dim); }
 .text-danger { color: var(--accent-danger); }
-.text-warn { color: var(--accent-warn); }
+.text-warn { color: var(--text-main); } /* attention text stays monochrome (UI.md §2) */
 .text-success { color: var(--accent-exec); }
 
-.fs-xs { font-size: 10px; }
+.fs-xs { font-size: var(--fs-data); }
 .fs-sm { font-size: 12px; }
 .fs-md { font-size: 14px; }
 .fs-lg { font-size: 16px; }
@@ -104,7 +104,7 @@ body {
   flex-grow: 1;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 /* Forms & Controls */
@@ -115,7 +115,7 @@ body {
 }
 
 .control-label {
-  font-size: 10px;
+  font-size: var(--fs-data);
   font-weight: 600;
   color: var(--text-dim);
   text-transform: uppercase;
@@ -149,7 +149,7 @@ body {
   border: var(--border-width) solid var(--border-main);
   color: var(--text-dim);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--fs-data);
   font-weight: 500;
   padding: 6px 4px;
   cursor: pointer;
@@ -160,6 +160,11 @@ body {
 .tactical-toggle:hover, .tactical-toggle:focus {
   border-color: var(--text-main);
   color: var(--text-main);
+}
+
+.preset-toggle {
+  text-align: left;
+  padding: 4px 6px;
 }
 
 .tactical-toggle.active {
@@ -196,9 +201,16 @@ body {
   cursor: not-allowed;
 }
 
+.btn-compact {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: var(--fs-data);
+  justify-content: center;
+}
+
 .shortcut-key {
-  font-size: 10px;
-  background: rgba(255,255,255,0.1);
+  font-size: var(--fs-data);
+  background: transparent;
   padding: 2px 6px;
   border: var(--border-width) solid currentColor;
 }
@@ -211,15 +223,15 @@ body {
   padding: 8px;
   overflow-y: auto;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-data);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .log-entry {
   display: grid;
-  grid-template-columns: 65px 1fr;
+  grid-template-columns: 13ch 1fr;
   gap: 8px;
 }
 
@@ -244,10 +256,7 @@ body {
 .wireframe-grid {
   width: 60%;
   height: 60%;
-  background-image: 
-    linear-gradient(var(--border-main) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border-main) 1px, transparent 1px);
-  background-size: 20px 20px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Cpath d='M0 0.5H20M0.5 0V20' stroke='%239CA3AF' stroke-width='1' fill='none'/%3E%3C/svg%3E");
   opacity: 0.2;
 }
 
@@ -264,12 +273,11 @@ body {
 
 .tactical-dropzone:hover, .tactical-dropzone.dragging {
   border-color: var(--text-main);
-  background: rgba(255, 255, 255, 0.03);
 }
 
 .dropzone-label {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-data);
   color: var(--text-dim);
   text-transform: uppercase;
 }
@@ -284,7 +292,7 @@ body {
   display: flex;
   justify-content: space-between;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-data);
   border: var(--border-width) solid var(--border-main);
   padding: 4px 6px;
 }
@@ -348,12 +356,21 @@ body {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 1px;
   background: var(--accent-exec);
   transform: translateX(-50%);
   z-index: 10;
   pointer-events: auto;
   cursor: ew-resize;
+}
+
+.slider-divider::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  right: -6px;
 }
 
 .slider-divider:focus-visible {
@@ -363,34 +380,33 @@ body {
 
 .tactical-box {
   position: absolute;
-  border: 1px solid var(--accent-warn);
+  border: 1px solid var(--accent-danger);
   pointer-events: auto;
   cursor: crosshair;
   z-index: 5;
 }
 
 .tactical-box:hover, .tactical-box.selected {
-  border-color: var(--accent-danger);
-  background: rgba(239, 68, 68, 0.1);
+  border-color: var(--text-main);
   z-index: 6;
 }
 
 .tactical-box-label {
   position: absolute;
-  top: -16px;
+  top: -18px;
   left: -1px;
-  background: var(--accent-warn);
-  color: var(--accent-warn-text);
+  background: var(--accent-danger);
+  color: var(--accent-danger-text);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-data);
   font-weight: 700;
   padding: 0 4px;
   white-space: nowrap;
 }
 
 .tactical-box:hover .tactical-box-label, .tactical-box.selected .tactical-box-label {
-  background: var(--accent-danger);
-  color: var(--accent-danger-text);
+  background: var(--text-main);
+  color: var(--bg-app);
 }
 
 .view-controls {
@@ -422,28 +438,25 @@ body.theme-nvg {
   --text-dim: #14532D;
   --accent-exec: #22C55E;
   --accent-exec-text: #000000;
-  --accent-warn: #16A34A;
-  --accent-warn-text: #000000;
   --accent-danger: #16A34A;
   --accent-danger-text: #000000;
   --accent-active: #16A34A;
   --accent-active-text: #000000;
 }
 
-body.theme-sun {
-  --bg-app: #FFFFFF;
-  --bg-panel: #FFFFFF;
-  --border-main: #000000;
+/* UI.md §2 light mode: concrete gray, #9CA3AF borders, absolute black text */
+body.theme-light {
+  --bg-app: #E5E7EB;
+  --bg-panel: #E5E7EB;
+  --border-main: #9CA3AF;
   --text-main: #000000;
-  --text-dim: #525252;
-  --accent-exec: #000000;
-  --accent-exec-text: #FFFFFF;
-  --accent-warn: #000000;
-  --accent-warn-text: #FFFFFF;
-  --accent-danger: #000000;
-  --accent-danger-text: #FFFFFF;
+  --text-dim: #374151;
+  --accent-exec: #10B981;
+  --accent-exec-text: #000000;
+  --accent-danger: #EF4444;
+  --accent-danger-text: #000000;
   --accent-active: #000000;
-  --accent-active-text: #FFFFFF;
+  --accent-active-text: #E5E7EB;
 }
 
 /* Review: box verdicts on the image */
@@ -467,7 +480,7 @@ body.theme-sun {
   border: var(--border-width) solid var(--border-main);
   color: var(--text-main);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-data);
   padding: 4px 6px;
   cursor: pointer;
   text-align: left;
@@ -483,7 +496,8 @@ body.theme-sun {
 
 .batch-row.active {
   border-color: var(--text-main);
-  background: rgba(255, 255, 255, 0.06);
+  outline: var(--border-width) solid var(--text-main);
+  outline-offset: -2px;
 }
 
 .batch-row-line {
@@ -518,7 +532,7 @@ body.theme-sun {
   flex-wrap: wrap;
   justify-content: center;
   gap: 4px 12px;
-  font-size: 11px;
+  font-size: var(--fs-data);
 }
 
 .tactical-toggle:disabled {
@@ -531,7 +545,7 @@ body.theme-sun {
   display: flex;
   justify-content: space-between;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-data);
   font-weight: 700;
   color: var(--text-dim);
   border-bottom: var(--border-width) solid var(--border-main);
@@ -560,7 +574,7 @@ body.theme-sun {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--fs-data);
   font-weight: 700;
 }
 
@@ -582,10 +596,37 @@ body.theme-sun {
   max-height: 200px;
   overflow-y: auto;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-data);
   white-space: pre-wrap;
   user-select: text;
   -webkit-user-select: text;
   word-break: break-all;
 }
 
+/* Pane header actions (theme, inspector) */
+.header-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.header-btn {
+  background: transparent;
+  border: var(--border-width) solid var(--border-main);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-data);
+  padding: 1px 4px;
+  cursor: pointer;
+  outline: none;
+}
+
+.header-btn:hover, .header-btn:focus {
+  border-color: var(--text-main);
+  color: var(--text-main);
+}
+
+.header-btn.active {
+  background: var(--accent-active);
+  color: var(--accent-active-text);
+  border-color: var(--accent-active);
+}

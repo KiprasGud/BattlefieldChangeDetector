@@ -334,3 +334,45 @@ def test_eval_metrics():
     assert (c["tp"], c["fp"], c["fn"]) == (1, 1, 0)
     s = summarize([c, match([], [[0, 0, 10, 10]])])
     assert s["precision"] == 0.5 and abs(s["recall"] - 0.5) < 1e-9
+
+
+# --- preset target classes -----------------------------------------------------------------------
+
+def test_build_criteria_bundles_instructions_and_query():
+    from app.analysis.presets import PRESETS, build_criteria, split_criteria
+    text = build_criteria(["wires", "damage"], "  burnt trucks ")
+    assert PRESETS["wires"].instruction in text and PRESETS["damage"].instruction in text
+    assert PRESETS["craters"].instruction not in text
+    assert split_criteria(text) == (["wires", "damage"], "burnt trucks")
+    assert build_criteria([], " new tracks ") == "new tracks"  # free text alone is unchanged
+    assert split_criteria("new tracks") == ([], "new tracks")
+
+
+def test_parse_ids_rejects_unknown():
+    from app.analysis.presets import parse_ids
+    assert parse_ids("craters, tracks,craters,") == ["craters", "tracks"]
+    with pytest.raises(ValueError):
+        parse_ids("craters,bogus")
+
+
+def test_mock_filters_by_preset_not_instruction_words():
+    from app.analysis.presets import build_criteria
+    a = _sample("pair02")
+    # The wire instruction mentions roads, trees and ditches: only the preset's own tag may count.
+    wires = analyze(a, a, build_criteria(["wires"]))
+    assert len(wires.changes) == 1
+    assert analyze(a, a, build_criteria(["camouflage"])).changes == []
+
+
+def test_pipeline_sends_no_heatmap_hints(monkeypatch):
+    from app import pipeline
+    seen = {}
+
+    def fake(img_a, aligned_b, criteria, lang="en", hints=None, aligned=True):
+        seen["hints"] = hints
+        return to_result({"summary": "", "changes": [], "recommendation": ""})
+
+    monkeypatch.setattr(pipeline, "analyze", fake)
+    jpg = lambda name: cv2.imencode(".jpg", _sample("pair01", name))[1].tobytes()
+    r = pipeline.run(jpg("a"), jpg("b"), "craters")
+    assert seen == {"hints": None} and "heatmap_url" in r.images

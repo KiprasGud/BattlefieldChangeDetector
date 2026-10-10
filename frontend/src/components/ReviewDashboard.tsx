@@ -224,6 +224,7 @@ export default function ReviewDashboard({ onExit }: Props) {
       else if (key === "r") review("rejected");
       else if (key === "u") review("pending");
       else if (key === "e") exportReport("html");
+      else if (key === "j") exportReport("json");
       else return;
       e.preventDefault();
     };
@@ -503,7 +504,7 @@ export default function ReviewDashboard({ onExit }: Props) {
               <span className="shortcut-key">[E]</span>
             </button>
             <button className="tactical-toggle" disabled={!shown} onClick={() => exportReport("json")}>
-              EXPORT JSON
+              [J] EXPORT JSON
             </button>
             <div className="fs-xs mono text-dim">[←/→] PAIR · [↑/↓] FINDING · [A]/[R]/[U] ACCEPT/REJECT/RESET</div>
             <div className={`fs-xs mono ${statusLine.startsWith("[ERR]") ? "text-danger" : "text-dim"}`}>{statusLine}</div>

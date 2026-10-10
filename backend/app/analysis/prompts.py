@@ -3,7 +3,7 @@ from typing import Optional
 
 LANGUAGES = {"en": "English", "lt": "Lithuanian"}
 
-PROMPT_VERSION = 3  # bump on any prompt change: it is part of the analysis cache key
+PROMPT_VERSION = 4  # bump on any prompt change: it is part of the analysis cache key
 
 IMAGE_B_ALIGNED = (
     "Image B: the present, already geometrically aligned to Image A. It may come from a different camera, resolution "
@@ -39,8 +39,9 @@ OUTPUT RULES:
 - "category": exactly one of these codes (always these English codes):
   "missing_object" = equipment, vehicles or other objects visible in Image A that are gone from Image B;
   "new_structure" = new buildings, fortifications, barriers, emplacements or other construction in Image B;
-  "terrain_change" = craters, vehicle tracks, earthworks, trenches, vegetation loss, felled trees, flooding or burn scars;
-  "unknown_anomaly" = a real change that fits none of the above (e.g. a newly appeared vehicle, damage to an existing building).
+  "terrain_change" = craters, vehicle tracks, earthworks, trenches, foxholes, vegetation loss, felled trees, flooding or burn scars;
+  "unknown_anomaly" = a real change that fits none of the above (e.g. a newly appeared vehicle, new wires or cables, damage to an existing building).
+  When a target class in the criteria names a category, use that category.
 - "location_text": short human description of where it is (e.g. "upper right, near the road junction").
 - "summary": at most 2 sentences on overall sector activity.
 - "recommendation": one concrete next action for the operator.
@@ -55,6 +56,9 @@ FEW_SHOT = """REFERENCE EXAMPLES:
 - Criteria "digging / earthworks": fresh soil (lighter or darker than surroundings, sharp edges), new trenches or berms -> type "earthworks", category "terrain_change".
 - Criteria "equipment": a vehicle, container or gun position visible in A with bare ground in the same spot in B -> type "vehicle removed", category "missing_object".
 - Criteria "construction": a new roof, wall, bunker or barrier line in B where A shows open ground -> type "new structure", category "new_structure".
+- Criteria "tripwires": a faint, very thin straight line between two anchor points (posts, trees, stakes) across a path or gap in B, absent in A -> type "tripwire", category "unknown_anomaly", confidence low or medium.
+- Criteria "camouflage": a patch in B whose colour or texture does not continue the surrounding vegetation, with unnaturally regular edges or a flat top, where A shows the plain ground or vegetation -> type "camouflage netting", category "new_structure".
+- Criteria "structural damage": a roof in A that in B shows holes, collapse or scorching, or a building outline in A that is a debris field in B -> type "damaged building", category "unknown_anomaly".
 """
 
 

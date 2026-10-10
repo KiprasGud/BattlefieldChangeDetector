@@ -16,6 +16,7 @@ import numpy as np
 from ..alignment import IMREAD_PIXELS, estimate_homography, extract_features
 from ..contracts import AnalysisResult
 from .postprocess import clean_box, to_result
+from .presets import PRESETS, split_criteria
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = ROOT / "shared" / "fixtures"
@@ -33,7 +34,9 @@ TAG_KEYWORDS = {
     "earthworks": ["dig", "trench", "earthwork", "fortif", "kasim", "apkas", "žem"],
     "tree": ["tree", "felled", "clearing", "forest", "medž", "medz", "iškirst", "nuvirt", "mišk"],
     "cable": ["cable", "wire", "line", "kabel", "laid", "linij"],
-    "structure": ["building", "structure", "roof", "barrier", "breach", "pastat", "stog", "užtvar"],
+    "structure": ["building", "structure", "roof", "barrier", "breach", "damage", "rubble", "destroy", "pastat",
+                  "stog", "užtvar", "griuv"],
+    "camouflage": ["camouf", "netting", "conceal", "maskuot", "maskavim"],
 }
 
 NO_MATCH_SUMMARY = {
@@ -81,8 +84,11 @@ def map_box(box: list[int], H: np.ndarray, src_shape, dst_shape) -> Optional[lis
 
 
 def criteria_tags(criteria: str) -> set[str]:
-    text = criteria.lower()
-    return {tag for tag, words in TAG_KEYWORDS.items() if any(w in text for w in words)}
+    """Preset tags plus keyword tags of the free text only (preset instructions would match everything)."""
+    preset_ids, custom = split_criteria(criteria)
+    text = custom.lower()
+    tags = {tag for pid in preset_ids for tag in PRESETS[pid].tags}
+    return tags | {tag for tag, words in TAG_KEYWORDS.items() if any(w in text for w in words)}
 
 
 def _pick(value, lang: str) -> str:

@@ -113,6 +113,46 @@ def test_analyze_empty_criteria_error():
     assert "criteria" in r.text.lower()
 
 
+def _post_sync(data):
+    a, b = (cv2.imread(str(SAMPLES / "pair01" / f"{n}.jpg")) for n in "ab")
+    return client.post(
+        "/api/analyze?sync=true",
+        files={"image_a": ("a.jpg", _jpg(a), "image/jpeg"), "image_b": ("b.jpg", _jpg(b), "image/jpeg")},
+        data=data,
+    )
+
+
+def test_presets_catalog():
+    ids = [p["id"] for p in client.get("/api/presets").json()]
+    assert ids == ["wires", "craters", "trenches", "tracks", "camouflage", "damage", "vehicles", "felled_trees"]
+
+
+def test_analyze_presets_only_uses_ai_pathway():
+    r = _post_sync({"presets": "craters"})
+    assert r.status_code == 200
+    assert [c["sector"] for c in r.json()["result"]["changes"]] == ["B3"]  # pair01 crater only, not the tracks
+    job = client.get(f"/api/jobs/{r.json()['job_id']}").json()
+    assert job["criteria"].startswith("DETECT THESE TARGET CLASSES:") and "CRATERS" in job["criteria"]
+
+
+def test_analyze_presets_plus_custom_query():
+    r = _post_sync({"presets": "craters,tracks", "criteria": "anything near the treeline"})
+    assert r.status_code == 200
+    assert {c["sector"] for c in r.json()["result"]["changes"]} == {"B3", "D1"}
+    job = client.get(f"/api/jobs/{r.json()['job_id']}").json()
+    assert job["criteria"].endswith("OPERATOR CUSTOM QUERY: anything near the treeline")
+
+
+def test_analyze_unknown_preset_error():
+    r = _post_sync({"presets": "craters,ufo"})
+    assert r.status_code == 400 and "ufo" in r.text
+
+
+def test_analyze_no_presets_no_query_error():
+    r = _post_sync({"presets": " , ", "criteria": " "})
+    assert r.status_code == 400 and "criteria" in r.text.lower()
+
+
 def test_analyze_invalid_lang_error():
     r = client.post(
         "/api/analyze",

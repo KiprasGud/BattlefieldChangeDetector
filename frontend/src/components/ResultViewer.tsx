@@ -143,6 +143,20 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
     else posFromClientX(e.clientX);
   };
 
+  // [1]-[4] switch the view; ignored while typing or with a modifier held.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (e.altKey || e.ctrlKey || e.metaKey || (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA"))) return;
+      const next = ({ "1": "slider", "2": "annotated", "3": "split", "4": "heatmap" } as const)[e.key as "1" | "2" | "3" | "4"];
+      if (!next || (next === "heatmap" && !heatmapUrl)) return;
+      e.preventDefault();
+      setMode(next);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [heatmapUrl]);
+
   const onHandleKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 10 : 2;
     if (e.key === "ArrowLeft") setSliderPos((p) => Math.max(0, p - step));
@@ -228,7 +242,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
             <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} statuses={statuses} natural={natural} />
             
             <div style={{ position: "absolute", bottom: "12px", right: "12px", display: "flex", alignItems: "center", gap: "8px", background: "var(--bg-panel)", padding: "4px 8px", border: "1px solid var(--border-main)" }}>
-              <span className="fs-xs mono text-warn">HEATMAP OPACITY: {(heatmapOpacity * 100).toFixed(0)}%</span>
+              <span className="fs-xs mono">HEATMAP OPACITY: {(heatmapOpacity * 100).toFixed(0)}%</span>
               <input
                 type="range"
                 min="0.1"
@@ -236,7 +250,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
                 step="0.05"
                 value={heatmapOpacity}
                 onChange={(e) => setHeatmapOpacity(parseFloat(e.target.value))}
-                style={{ accentColor: "var(--accent-warn)" }}
+                style={{ accentColor: "var(--text-main)" }}
               />
             </div>
           </div>

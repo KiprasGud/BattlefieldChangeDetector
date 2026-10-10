@@ -140,11 +140,11 @@ def run(
     }
     cv2.imwrite(str(job_dir / "aligned_b.jpg"), aligned.aligned_b)
 
-    # Stage 2: Heatmap
+    # Stage 2: Heatmap (visual aid only: detection is the AI's job, OpenCV only aligns)
     if stage_callback:
         stage_callback("heatmap", timings)
     t0 = time.perf_counter()
-    heat_map, hints = compute_heatmap(img_a, img_b, aligned)
+    heat_map, _ = compute_heatmap(img_a, img_b, aligned)
     if heat_map is not None:
         try:
             cv2.imwrite(str(job_dir / "heatmap.jpg"), heatmap_image(heat_map))
@@ -158,14 +158,19 @@ def run(
         stage_callback("ai", timings)
     t0 = time.perf_counter()
     if not ai_enabled():
-        result = cv_result(hints)
-        warnings.append("AI step disabled: showing change-heatmap regions only (unclassified).")
+        result = AnalysisResult(
+            report_date=date.today().isoformat(),
+            summary="AI analysis is off: no detections were made.",
+            changes=[],
+            recommendation="Enable the AI step to detect the selected target classes.",
+        )
+        warnings.append("AI step disabled: OpenCV is used for alignment only, no detections were made.")
     else:
         offline = use_mock()
         if offline:
             warnings.append("OFFLINE MODE: MOCK_LLM=1 or no GEMINI_API_KEY. Using fixture data.")
         try:
-            result = analyze(img_a, aligned.aligned_b, criteria, lang, hints=hints, aligned=aligned.ok)
+            result = analyze(img_a, aligned.aligned_b, criteria, lang, aligned=aligned.ok)
         except Exception as e:
             # Automatic offline fallback: switch to mock fixture when Gemini fails
             try:
