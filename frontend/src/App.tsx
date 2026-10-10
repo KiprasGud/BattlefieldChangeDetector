@@ -1,18 +1,36 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { analyze, checkHealth, fetchPresets, CancelledError, type JobProgress, type Preset } from "./api";
 import type { AnalyzeResponse } from "./types";
 import ResultViewer from "./components/ResultViewer";
 import ReviewDashboard from "./components/ReviewDashboard";
 
 const HEALTH_INTERVAL_MS = 15000;
+const MAX_LOGS = 200; // older log lines are dropped
 
 type View = "analyze" | "review";
 type Theme = "dark" | "light" | "nvg";
+
+interface LogLine {
+  time: string;
+  msg: string;
+  level: "info" | "warn" | "success";
+}
+
+const logLine = (msg: string): LogLine => ({
+  time: `[${new Date().toISOString().split("T")[1].slice(0, 11)}]`,
+  msg,
+  level: msg.includes("[WARN]") || msg.includes("[ERR]") ? "warn" : msg.includes("[SUCCESS]") ? "success" : "info",
+});
 
 const isTyping = (t: EventTarget | null) => {
   const el = t as HTMLElement | null;
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
 };
+
+const trgt = (i: number) => `TRGT-${String(i + 1).padStart(2, "0")}`;
+
+const escapeXml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 export default function App() {
   // "#review" opens the review dashboard directly (bookmarkable).
@@ -31,6 +49,7 @@ export default function App() {
   // Tactical State
   const [fileA, setFileA] = useState<File | null>(null);
   const [fileB, setFileB] = useState<File | null>(null);
+  const [dragTarget, setDragTarget] = useState<string | null>(null); // dropzone id under a dragged file
   // Pre-made target classes (ids from GET /api/presets); the backend sends each label as plain query text.
   const [presets, setPresets] = useState<Preset[]>([]);
   const [criteria, setCriteria] = useState<string[]>([]);
@@ -41,7 +60,7 @@ export default function App() {
       prev.includes(val) ? prev.filter(c => c !== val) : [...prev, val]
     );
   };
-  const [logs, setLogs] = useState<string[]>(["[SYS] Terminal initialized."]);
+  const [logs, setLogs] = useState<LogLine[]>(() => [logLine("[SYS] Terminal initialized.")]);
   const [selectedChangeIdx, setSelectedChangeIdx] = useState<number | null>(null);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -50,10 +69,9 @@ export default function App() {
   const purgeArmedTime = useRef<number>(0);
 
   const [inspectorVisible, setInspectorVisible] = useState(false);
-  const [xmlPreview, setXmlPreview] = useState<string>("");
 
   const addLog = (msg: string) => {
-    setLogs(prev => [...prev, `[${new Date().toISOString().split('T')[1].slice(0,11)}] ${msg}`]);
+    setLogs(prev => [...prev.slice(-(MAX_LOGS - 1)), logLine(msg)]);
   };
 
   useEffect(() => {
@@ -90,6 +108,14 @@ export default function App() {
       window.clearInterval(t);
     };
   }, []);
+
+  const changes = data?.result.changes ?? [];
+  const selected = selectedChangeIdx !== null ? changes[selectedChangeIdx] ?? null : null;
+
+  const moveSelection = (step: number) => {
+    if (!changes.length) return;
+    setSelectedChangeIdx(i => (i === null ? 0 : Math.max(0, Math.min(changes.length - 1, i + step))));
+  };
 
   const handlePurge = () => {
     const now = Date.now();
@@ -167,6 +193,9 @@ export default function App() {
       } else if (e.key === "/" && !isTyping(e.target)) {
         e.preventDefault();
         queryRef.current?.focus();
+      } else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && changes.length && !isTyping(e.target)) {
+        e.preventDefault();
+        moveSelection(e.key === "ArrowUp" ? -1 : 1);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -233,11 +262,9 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    if (!data) {
-      setXmlPreview("");
-      return;
-    }
+  // Derived from the result, not kept in state: no extra render per analysis.
+  const xmlPreview = useMemo(() => {
+    if (!data) return "";
     const now = new Date();
     const timeStr = now.toISOString();
     const staleStr = new Date(now.getTime() + 10 * 60000).toISOString();
@@ -250,13 +277,13 @@ export default function App() {
       xml += `  <event version="2.0" uid="${uid}" type="${cotType}" time="${timeStr}" start="${timeStr}" stale="${staleStr}" how="m-g">\n`;
       xml += `    <point lat="0.0" lon="0.0" hae="0.0" ce="9999" le="9999" />\n`;
       xml += `    <detail>\n`;
-      xml += `      <contact callsign="TRGT-${String(i+1).padStart(2, '0')}" />\n`;
-      xml += `      <remarks>Bounds: [${c.box.map(Math.round).join(', ')}]</remarks>\n`;
+      xml += `      <contact callsign="${trgt(i)}" />\n`;
+      xml += `      <remarks>${escapeXml(c.type)} | Bounds: [${c.box.map(Math.round).join(', ')}]</remarks>\n`;
       xml += `    </detail>\n`;
       xml += `  </event>\n`;
     });
     xml += `</events>`;
-    setXmlPreview(xml);
+    return xml;
   }, [data, criteria]);
 
   const handleExportXML = () => {
@@ -277,7 +304,8 @@ export default function App() {
       job_id: data.job_id,
       timestamp: new Date().toISOString(),
       targets: data.result.changes.map((c, i) => ({
-        id: `TRGT-${String(i+1).padStart(2, '0')}`,
+        id: trgt(i),
+        label: c.type,
         box: c.box
       }))
     };
@@ -297,10 +325,17 @@ export default function App() {
 
   const dropzone = (id: string, label: "Baseline" | "Recon", file: File | null, set: (f: File) => void) => (
     <div
-      className="tactical-dropzone"
-      onDragOver={e => e.preventDefault()}
+      className={`tactical-dropzone ${dragTarget === id ? "dragging" : ""}`}
+      onDragOver={e => {
+        e.preventDefault();
+        if (dragTarget !== id) setDragTarget(id);
+      }}
+      onDragLeave={e => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragTarget(null);
+      }}
       onDrop={e => {
         e.preventDefault();
+        setDragTarget(null);
         ingest(e.dataTransfer.files?.[0], label, set);
       }}
       onClick={() => document.getElementById(id)?.click()}
@@ -319,8 +354,8 @@ export default function App() {
       <aside className="pane">
         <div className="pane-header">
           <div className="pane-title text-success">ŽVALGAS-SYS // INGESTION</div>
-          <div className={`fs-xs mono ${backendUp ? "text-success" : "text-danger"}`}>
-            {backendUp ? "UPLINK: OK" : "UPLINK: FAIL"}
+          <div className={`fs-xs mono ${backendUp === null ? "text-dim" : backendUp ? "text-success" : "text-danger"}`}>
+            {backendUp === null ? "UPLINK: ..." : backendUp ? "UPLINK: OK" : "UPLINK: FAIL"}
           </div>
         </div>
 
@@ -368,13 +403,12 @@ export default function App() {
             />
           </div>
 
-          <div style={{ flexGrow: 1 }} />
+          <div className="spacer" />
 
           <button
             className={`btn-exec ${loading ? "active" : ""}`}
             onClick={handleExecute}
             disabled={loading || !fileA || !fileB || (!criteria.length && !customQuery.trim())}
-            style={loading ? { background: "var(--accent-active)", color: "var(--accent-active-text)", borderColor: "var(--accent-active)" } : {}}
           >
             <span>{loading ? `[PROCESSING...]` : "EXECUTE"}</span>
             <span className="shortcut-key">[F5] / [CTRL+ENTER]</span>
@@ -388,12 +422,12 @@ export default function App() {
           <div className="pane-title">DIFF ENGINE // WORKSPACE</div>
           {data && (
              <div className="fs-xs mono">
-               TARGETS FOUND: {data.result.changes.length}
+               TARGETS FOUND: {changes.length}
              </div>
           )}
         </div>
 
-        <div className="pane-content" style={{ padding: 0 }}>
+        <div className="pane-content flush">
           {loading ? (
             <div className="wireframe-placeholder">
               <div>PROCESSING...</div>
@@ -431,16 +465,28 @@ export default function App() {
         <div className="pane-content">
           <div className="control-group">
             <div className="control-label">COORDINATE READOUT</div>
-            <div className="log-container" style={{ minHeight: "80px", flexGrow: 0 }}>
-              {selectedChangeIdx !== null && data ? (
+            <div className="log-container readout">
+              {selected && selectedChangeIdx !== null ? (
                 <>
                   <div className="log-entry">
                     <span className="log-time">TRGT-ID:</span>
-                    <span>TRGT-{String(selectedChangeIdx + 1).padStart(2, '0')}</span>
+                    <span>{trgt(selectedChangeIdx)}</span>
+                  </div>
+                  <div className="log-entry">
+                    <span className="log-time">LABEL:</span>
+                    <span>{selected.type}</span>
+                  </div>
+                  <div className="log-entry">
+                    <span className="log-time">CONF:</span>
+                    <span>{selected.confidence.toUpperCase()}</span>
+                  </div>
+                  <div className="log-entry">
+                    <span className="log-time">SECTOR:</span>
+                    <span>{selected.sector ?? "-"}</span>
                   </div>
                   <div className="log-entry">
                     <span className="log-time">BOUNDS:</span>
-                    <span>[{data.result.changes[selectedChangeIdx].box.map(Math.round).join(', ')}]</span>
+                    <span>[{selected.box.map(Math.round).join(', ')}]</span>
                   </div>
                 </>
               ) : (
@@ -458,25 +504,43 @@ export default function App() {
             </div>
           </div>
 
-          <div className="control-group" style={{ flexGrow: 1 }}>
+          {changes.length > 0 && (
+            <div className="control-group">
+              <div className="control-label split">
+                <span>TARGET LIST <span className="mono">[↑/↓]</span></span>
+                <span className="mono">{changes.length}</span>
+              </div>
+              <div className="target-list">
+                {changes.map((c, i) => (
+                  <button
+                    key={i}
+                    className={`target-row ${selectedChangeIdx === i ? "active" : ""}`}
+                    title={c.description}
+                    onClick={() => setSelectedChangeIdx(selectedChangeIdx === i ? null : i)}
+                  >
+                    <span className="mono">{trgt(i)}</span>
+                    <span className="target-row-label">{c.type}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="control-group grow">
             <div className="control-label">SYSTEM LOGS</div>
             <div className="log-container">
-              {logs.map((l, i) => {
-                 const isWarn = l.includes("[WARN]") || l.includes("[ERR]");
-                 const isSuccess = l.includes("[SUCCESS]");
-                 return (
-                   <div key={i} className={`log-entry ${isWarn ? "text-danger" : isSuccess ? "text-success" : ""}`}>
-                     <span className="log-time">{l.split(' ')[0]}</span>
-                     <span>{l.split(' ').slice(1).join(' ')}</span>
-                   </div>
-                 );
-              })}
+              {logs.map((l, i) => (
+                <div key={i} className={`log-entry ${l.level === "warn" ? "text-danger" : l.level === "success" ? "text-success" : ""}`}>
+                  <span className="log-time">{l.time}</span>
+                  <span>{l.msg}</span>
+                </div>
+              ))}
               <div ref={logsEndRef} />
             </div>
           </div>
 
           <div className="control-group">
-            <div className="control-label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div className="control-label split">
               <span>EXPORT PIPELINE</span>
               <button className={`header-btn ${inspectorVisible ? "active" : ""}`} onClick={() => setInspectorVisible(!inspectorVisible)}>
                 [ALT+I] INSPECT
@@ -489,7 +553,7 @@ export default function App() {
               </div>
             )}
 
-            <div style={{ display: "flex", gap: "4px" }}>
+            <div className="btn-row">
               <button
                 className="btn-exec btn-compact"
                 disabled={!data}

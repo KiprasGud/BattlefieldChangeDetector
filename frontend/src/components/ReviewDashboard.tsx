@@ -88,11 +88,20 @@ export default function ReviewDashboard({ onExit }: Props) {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [queryDraft, setQueryDraft] = useState("");
   const queryFocused = useRef(false);
+  // Picked target ids, updated on click; the next click builds on these, not on settings still being saved.
+  const [targetIds, setTargetIds] = useState<string[]>([]);
+  const targetRef = useRef<string[]>([]);
+  // Settings saves run one at a time, in click order. A poll that overlaps a save may return the settings from
+  // before it, so its settings are dropped (settingsGen changes when a save starts or ends).
+  const saving = useRef(0);
+  const settingsGen = useRef(0);
+  const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 
   const refresh = useCallback(async () => {
+    const gen = settingsGen.current;
     try {
       const [s, i, list] = await Promise.all([fetchSettings(), fetchInbox(), fetchBatches()]);
-      setSettings(s);
+      if (gen === settingsGen.current && !saving.current) setSettings(s);
       setInbox(i);
       setBatches(list);
       setBackendUp(true);
@@ -122,6 +131,25 @@ export default function ReviewDashboard({ onExit }: Props) {
   useEffect(() => {
     if (!queryFocused.current) setQueryDraft(savedQuery);
   }, [savedQuery]);
+
+  useEffect(() => {
+    if (!settings || saving.current) return;
+    targetRef.current = settings.batch_presets;
+    setTargetIds(settings.batch_presets);
+  }, [settings]);
+
+  const putSettings = (patch: Parameters<typeof updateSettings>[0]) => {
+    saving.current += 1;
+    settingsGen.current += 1;
+    const run = saveQueue.current
+      .then(() => updateSettings(patch))
+      .finally(() => {
+        saving.current -= 1;
+        settingsGen.current += 1;
+      });
+    saveQueue.current = run.catch(() => undefined);
+    return run;
+  };
 
   // A pending pair is settled once the poll reports it batched (or it left the inbox).
   useEffect(() => {
@@ -198,7 +226,7 @@ export default function ReviewDashboard({ onExit }: Props) {
   const toggleAi = async () => {
     if (!settings) return;
     try {
-      const s = await updateSettings({ ai_enabled: !settings.ai_enabled });
+      const s = await putSettings({ ai_enabled: !settings.ai_enabled });
       setSettings(s);
       setStatusLine(`[SYS] AI STEP ${s.ai_enabled ? "ON" : "OFF"} FOR NEW BATCHES.`);
     } catch (e: any) {
@@ -209,7 +237,7 @@ export default function ReviewDashboard({ onExit }: Props) {
   const toggleAutoBatch = async () => {
     if (!settings) return;
     try {
-      const s = await updateSettings({ auto_batch: !settings.auto_batch });
+      const s = await putSettings({ auto_batch: !settings.auto_batch });
       setSettings(s);
       setStatusLine(
         s.auto_batch
@@ -224,18 +252,22 @@ export default function ReviewDashboard({ onExit }: Props) {
 
   const saveTarget = async (patch: { batch_presets?: string[]; batch_query?: string }) => {
     try {
-      const s = await updateSettings(patch);
+      const s = await putSettings(patch);
       setSettings(s);
       setStatusLine(`[SYS] NEW BATCHES TARGET: ${s.batch_criteria.toUpperCase()}`);
     } catch (e: any) {
       setStatusLine(`[ERR] ${e?.message || String(e)}`);
+      if (!saving.current) refresh(); // show what the server kept
     }
   };
 
   const toggleTarget = (id: string) => {
     if (!settings) return;
-    const ids = settings.batch_presets;
-    saveTarget({ batch_presets: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id] });
+    const ids = targetRef.current;
+    const next = ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+    targetRef.current = next;
+    setTargetIds(next);
+    saveTarget({ batch_presets: next });
   };
 
   const commitQuery = () => {
@@ -442,8 +474,8 @@ export default function ReviewDashboard({ onExit }: Props) {
       <aside className="pane">
         <div className="pane-header">
           <div className="pane-title text-success">ŽVALGAS-SYS // REVIEW</div>
-          <div className={`fs-xs mono ${backendUp === false ? "text-danger" : "text-success"}`}>
-            {backendUp === false ? "UPLINK: FAIL" : "UPLINK: OK"}
+          <div className={`fs-xs mono ${backendUp === null ? "text-dim" : backendUp ? "text-success" : "text-danger"}`}>
+            {backendUp === null ? "UPLINK: ..." : backendUp ? "UPLINK: OK" : "UPLINK: FAIL"}
           </div>
         </div>
         <div className="pane-content">
@@ -487,7 +519,7 @@ export default function ReviewDashboard({ onExit }: Props) {
             <div className="control-label">TARGET CRITERIA (AI) // NEW BATCHES</div>
             <div className="toggle-grid">
               {presets.map((p) => {
-                const on = settings?.batch_presets.includes(p.id) ?? false;
+                const on = targetIds.includes(p.id);
                 return (
                   <button
                     key={p.id}
@@ -518,9 +550,9 @@ export default function ReviewDashboard({ onExit }: Props) {
               }}
             />
             <div className="fs-xs mono text-dim">
-              {!settings?.batch_presets.length && !settings?.batch_query
+              {!targetIds.length && !settings?.batch_query
                 ? "NONE PICKED: ALL CHANGES (DEFAULT)"
-                : `AI LOOKS FOR: ${settings.batch_criteria.toUpperCase()}`}
+                : `AI LOOKS FOR: ${settings?.batch_criteria.toUpperCase() ?? "..."}`}
               {settings && !settings.ai_enabled && " · NO EFFECT WHILE AI IS OFF"}
             </div>
           </div>
@@ -551,7 +583,7 @@ export default function ReviewDashboard({ onExit }: Props) {
           </div>
 
           <div className="control-group">
-            <div className="control-label" style={{ display: "flex", justifyContent: "space-between" }}>
+            <div className="control-label split">
               <span>PAIRS</span>
               <span>
                 {inbox?.pairs?.filter((p) => p.batched).length ?? 0}/{inbox?.pairs?.length ?? 0} BATCHED
@@ -583,7 +615,7 @@ export default function ReviewDashboard({ onExit }: Props) {
           </div>
 
           <div className="control-group">
-            <div className="control-label" style={{ display: "flex", justifyContent: "space-between" }}>
+            <div className="control-label split">
               <span>BATCH QUEUE [ALT+↑/↓]</span>
               <span>{batches.length}</span>
             </div>
@@ -614,7 +646,7 @@ export default function ReviewDashboard({ onExit }: Props) {
             })}
           </div>
 
-          <div style={{ flexGrow: 1 }} />
+          <div className="spacer" />
           <button className="btn-exec" onClick={requeue} disabled={!selectedId}>
             <span>RE-QUEUE BATCH</span>
             <span className="shortcut-key">[ALT+Q]</span>
@@ -632,7 +664,7 @@ export default function ReviewDashboard({ onExit }: Props) {
             </div>
           )}
         </div>
-        <div className="pane-content" style={{ padding: 0, position: "relative" }}>
+        <div className="pane-content flush">
           {center}
           {reportOpen && shown && (
             <ReportViewer batch={shown} onClose={() => setReportOpen(false)} onExport={exportReport} />
@@ -651,6 +683,18 @@ export default function ReviewDashboard({ onExit }: Props) {
           )}
         </div>
         <div className="pane-content">
+          {shown && (
+            <div className="control-group">
+              <div className="control-label">AI TARGET // THIS BATCH</div>
+              <div className="fs-xs mono">
+                {shown.ai_enabled ? (shown.criteria ?? "ALL CHANGES (DEFAULT)").toUpperCase() : "CV ONLY: ALL HEATMAP REGIONS, UNCLASSIFIED"}
+              </div>
+              {shown.ai_enabled && settings && shown.criteria !== settings.batch_criteria && (
+                <div className="fs-xs mono text-dim">NEW TARGET APPLIES ON RE-QUEUE [ALT+Q]</div>
+              )}
+            </div>
+          )}
+
           {pair && pair.summary && (
             <div className="control-group">
               <div className="control-label">PAIR SUMMARY ({pair.source.toUpperCase()})</div>
@@ -717,12 +761,12 @@ export default function ReviewDashboard({ onExit }: Props) {
 
           {!pair && <div className="fs-xs mono text-dim">NO FINDINGS TO REVIEW.</div>}
 
-          <div style={{ flexGrow: 1 }} />
+          <div className="spacer" />
 
           {shown && shown.warnings.length > 0 && (
             <div className="control-group">
               <div className="control-label">BATCH WARNINGS</div>
-              <div className="log-container" style={{ flexGrow: 0, maxHeight: "120px" }}>
+              <div className="log-container compact">
                 {shown.warnings.map((w, i) => (
                   <div key={i} className="text-warn">
                     {w}
@@ -743,6 +787,9 @@ export default function ReviewDashboard({ onExit }: Props) {
             </button>
             <button className="tactical-toggle" disabled={!shown} onClick={() => exportReport("json")}>
               [J] EXPORT JSON
+            </button>
+            <button className="tactical-toggle" disabled={!shown} onClick={() => exportReport("pdf")}>
+              [P] EXPORT PDF
             </button>
             <div className="fs-xs mono text-dim">[←/→] PAIR · [↑/↓] FINDING · [A]/[R]/[U] ACCEPT/REJECT/RESET · [V] REPORT</div>
             <div className={`fs-xs mono ${statusLine.startsWith("[ERR]") ? "text-danger" : "text-dim"}`}>{statusLine}</div>

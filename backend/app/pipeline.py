@@ -10,7 +10,7 @@ import numpy as np
 
 from .alignment import IMREAD_PIXELS, align, harmonize_resolution
 from .analysis import analyze, use_mock
-from .analysis.postprocess import clean_box, sector_for
+from .analysis.postprocess import clean_box, sector_for, unique_labels
 from .contracts import AlignResult, AnalysisResult, AnalyzeResponse, Change
 from .render import annotate
 from .settings import ai_enabled
@@ -71,7 +71,7 @@ def cv_result(hints: Optional[list[list[int]]]) -> AnalysisResult:
             continue
         sector = sector_for(box)
         changes.append(Change(
-            type="pixel difference",
+            type=f"pixel difference, sector {sector}",
             description=f"Heatmap region {i}: colour or texture differs between the images.",
             location_text=f"sector {sector}",
             confidence="low",
@@ -84,7 +84,7 @@ def cv_result(hints: Optional[list[list[int]]]) -> AnalysisResult:
         report_date=date.today().isoformat(),
         summary=f"CV-only analysis: the change heatmap flagged {n} region{'' if n == 1 else 's'}. "
                 "AI analysis is off, so the regions are not classified.",
-        changes=changes,
+        changes=unique_labels(changes),
         recommendation="Review every flagged region manually." if n else "No pixel or structural differences flagged.",
     )
 

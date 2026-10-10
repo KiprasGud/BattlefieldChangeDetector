@@ -20,7 +20,7 @@ CATEGORY_LABELS = {
 
 
 class Change(BaseModel):
-    type: str                       # e.g. "crater", "tracks", "fallen tree"
+    type: str                       # unique descriptive label, e.g. "large crater, road edge", "small crater, north field"
     description: str                # what exactly changed
     location_text: str              # e.g. "upper right, near road junction"
     confidence: Confidence

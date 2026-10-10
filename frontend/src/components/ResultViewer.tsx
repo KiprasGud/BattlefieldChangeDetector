@@ -68,15 +68,17 @@ function TacticalBoxOverlay({
         const isSelected = selectedIndex === idx;
         const review = statuses?.[idx] ? `review-${statuses[idx]}` : "";
         const code = c.category ? ` ${CATEGORY_CODES[c.category] ?? "UNK"}` : "";
+        const id = `TRGT-${String(idx + 1).padStart(2, '0')}`;
         return (
           <div
             key={idx}
             data-box={idx}
             className={`tactical-box ${isSelected ? "selected" : ""} ${review}`}
             onClick={onSelect ? () => onSelect(idx) : undefined}
+            title={`${id} ${c.type}${c.description ? `\n${c.description}` : ""}`}
             style={{ top: `${ymin}%`, left: `${xmin}%`, width: `${xmax - xmin}%`, height: `${ymax - ymin}%` }}
           >
-            <span className="tactical-box-label">[TRGT-{String(idx + 1).padStart(2, '0')}{code}]</span>
+            <span className="tactical-box-label">[{id}{code}] {c.type}</span>
           </div>
         );
       })}
@@ -241,7 +243,7 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
             <SafeImg src={heatmapUrl} alt="Heatmap" className="diff-layer" style={{ opacity: heatmapOpacity, mixBlendMode: "screen" }} />
             <TacticalBoxOverlay changes={changes} selectedIndex={selectedIndex} onSelect={toggleSelect} statuses={statuses} natural={natural} />
             
-            <div style={{ position: "absolute", bottom: "12px", right: "12px", display: "flex", alignItems: "center", gap: "8px", background: "var(--bg-panel)", padding: "4px 8px", border: "1px solid var(--border-main)" }}>
+            <div className="heatmap-opacity">
               <span className="fs-xs mono">HEATMAP OPACITY: {(heatmapOpacity * 100).toFixed(0)}%</span>
               <input
                 type="range"
@@ -250,7 +252,6 @@ export default function ResultViewer({ data, selectedIndex, onSelectIndex, statu
                 step="0.05"
                 value={heatmapOpacity}
                 onChange={(e) => setHeatmapOpacity(parseFloat(e.target.value))}
-                style={{ accentColor: "var(--text-main)" }}
               />
             </div>
           </div>

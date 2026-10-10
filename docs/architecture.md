@@ -87,10 +87,13 @@ results (NMS), rendering, cache, offline fallback.
 Gemini (`gemini-3.5-flash-lite`, `backend/app/analysis/`) does exactly two things:
 1. **Detection**: compares A with aligned B against the operator's criteria, returns typed changes with boxes, a
    2-sentence summary and a recommendation. Pre-made target classes (`analysis/presets.py`) and the free-text
-   query reach the model as one plain-text query: a selected class sends its label, exactly like typed text. Only the batch path passes heatmap candidates as hints; the
+   query reach the model as one plain-text query: a selected class sends its label, exactly like typed text. The
+   prompt frames that text as a strict TARGETS list (scope rule: report only changes that are one of the targets,
+   never other real changes). Each detection gets a unique descriptive label in `type`; `postprocess.unique_labels`
+   suffixes any repeat. Only the batch path passes heatmap candidates as hints; the
    single-pair `/api/analyze` flow sends none, so every detection there is the model's own.
 2. **Verification** (`ANALYSIS_VERIFY=1`): sees A/B crops of each detection and rejects shadows, lighting,
-   alignment artifacts and off-criteria changes. A failed verification keeps the detections.
+   alignment artifacts and off-target changes. A failed verification keeps the detections.
 
 Gemini never decides whether two images match, never sees file metadata (images are re-encoded from pixels as
 JPEG), and never receives earlier jobs.

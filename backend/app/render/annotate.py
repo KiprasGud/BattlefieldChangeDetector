@@ -1,4 +1,6 @@
 """PERSON 3: draw red boxes + labels on the image with optional sector grid."""
+import unicodedata
+
 import cv2
 import numpy as np
 
@@ -10,6 +12,15 @@ CATEGORY_CODES = {
     "terrain_change": "TERR",
     "unknown_anomaly": "UNK",
 }
+
+MAX_LABEL_CHARS = 32  # the AI label on a badge; longer ones end in "..."
+
+
+def badge_label(text: str, limit: int = MAX_LABEL_CHARS) -> str:
+    """ASCII form of the AI label for cv2.putText, which cannot draw letters like "ė" or "š" (they become "e", "s")."""
+    ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    ascii_text = " ".join(ascii_text.split())
+    return ascii_text if len(ascii_text) <= limit else ascii_text[: limit - 3].rstrip() + "..."
 
 
 def draw_grid_overlay(img: np.ndarray, opacity: float = 0.25) -> np.ndarray:
@@ -103,17 +114,20 @@ def annotate(img: np.ndarray, result: AnalysisResult, draw_grid: bool = False) -
             label_text += f" [{c.sector}]"
         if c.category:
             label_text += f" {CATEGORY_CODES.get(c.category, 'UNK')}"
+        name = badge_label(c.type)
+        if name:
+            label_text += f" - {name}"
 
         font = cv2.FONT_HERSHEY_DUPLEX
         font_scale = 0.55
         font_thickness = 1
         (txt_w, txt_h), baseline = cv2.getTextSize(label_text, font, font_scale, font_thickness)
 
-        # Badge positioning above box or inside box if too close to top
+        # Badge positioning above box or inside box if too close to top; shifted left so the label stays in frame
         badge_y2 = py1 - 4 if py1 - (txt_h + 8) > 0 else py1 + txt_h + 10
         badge_y1 = badge_y2 - txt_h - 6
-        badge_x1 = px1
-        badge_x2 = min(w - 1, px1 + txt_w + 10)
+        badge_x1 = max(0, min(px1, w - 1 - (txt_w + 10)))
+        badge_x2 = min(w - 1, badge_x1 + txt_w + 10)
 
         # Badge background: solid dark red/black with border
         cv2.rectangle(out, (badge_x1, badge_y1), (badge_x2, badge_y2), (20, 20, 20), -1)

@@ -174,21 +174,25 @@ The UI follows [`UI.md`](UI.md) exactly. It is a fixed 3-pane grid:
 | `F5` / `Ctrl+Enter` | Execute | `←` / `→` | Previous / next pair |
 | `Alt+1`…`Alt+8` | Toggle target class | `↑` / `↓` | Previous / next finding |
 | `/` | Focus custom query | `A` / `R` / `U` | Accept / reject / reset finding |
-| `Alt+B` / `Alt+C` | Open baseline / recon picker | `E` / `J` | Export report HTML / JSON |
+| `Alt+B` / `Alt+C` | Open baseline / recon picker | `E` / `J` / `P` | Export report HTML / JSON / PDF |
 | `1` `2` `3` `4` | Slider / HUD / split / heatmap | `Alt+↑` / `Alt+↓` | Previous / next batch |
 | `Alt+X` / `Alt+J` | Export CoT XML / JSON | `Alt+Q` | Re-run batch |
 | `Alt+I` | Toggle payload inspector | `Alt+I` | Toggle AI step |
 | `Esc` `Esc` (within 1 s) | Purge buffers | `1` `2` `3` `4` | Viewer mode |
 | `Alt+A` / `Alt+R` | Analyze / Review view | `Alt+A` / `Alt+R` | Analyze / Review view |
 | `Alt+S` / `Alt+N` | Light ↔ dark / NVG | `Alt+S` / `Alt+N` | Light ↔ dark / NVG |
+| `↑` / `↓` | Previous / next target | `V` | View report |
 
 In the slider view, the divider also takes `←`/`→` (`Shift` for bigger steps), `Home` and `End` when focused.
 
 ### Exports
 - **CoT XML**: one `<event>` per target (`TRGT-01`…). The type is `a-h-G-U-C` when the `vehicles` or `tracks` class
-  was searched, `a-h-G` otherwise. Each event carries the box bounds in its remarks. There is no GPS in the imagery,
-  so points are `0,0`, `ce=9999`.
-- **JSON**: job id, timestamp and target boxes.
+  was searched, `a-h-G` otherwise. Each event carries the target's AI label and box bounds in its remarks. There is
+  no GPS in the imagery, so points are `0,0`, `ce=9999`.
+- **JSON**: job id, timestamp, and per target its id, AI label and box.
+
+Every target carries a unique descriptive AI label (`type`, e.g. "large crater, road edge" / "small crater, north
+field"). It is shown on the box overlay, burned into the annotated image and listed in the right pane.
 
 ---
 

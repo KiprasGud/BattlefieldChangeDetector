@@ -107,11 +107,26 @@ body {
   gap: 12px;
 }
 
+/* Center pane: the viewer fills it edge to edge */
+.pane-content.flush {
+  padding: 0;
+  position: relative;
+}
+
+/* Pushes what follows to the bottom of a pane */
+.spacer {
+  flex-grow: 1;
+}
+
 /* Forms & Controls */
 .control-group {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.control-group.grow {
+  flex-grow: 1;
 }
 
 .control-label {
@@ -120,6 +135,19 @@ body {
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+/* Label with a value or action on the right */
+.control-label.split {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-row {
+  display: flex;
+  gap: 4px;
 }
 
 .tactical-input {
@@ -151,20 +179,21 @@ body {
   font-family: var(--font-sans);
   font-size: var(--fs-data);
   font-weight: 500;
-  padding: 6px 4px;
+  padding: 6px 8px;
   cursor: pointer;
   text-align: center;
   outline: none;
 }
 
-.tactical-toggle:hover, .tactical-toggle:focus {
+/* :focus-visible, not :focus: a mouse click must not leave the button looking hovered.
+   Active toggles keep their inverted colours on hover. */
+.tactical-toggle:not(.active):not(:disabled):hover, .tactical-toggle:not(.active):focus-visible {
   border-color: var(--text-main);
   color: var(--text-main);
 }
 
 .preset-toggle {
   text-align: left;
-  padding: 4px 6px;
 }
 
 .tactical-toggle.active {
@@ -191,7 +220,7 @@ body {
   align-items: center;
 }
 
-.btn-exec:hover, .btn-exec:focus {
+.btn-exec:hover:not(:disabled), .btn-exec:focus-visible:not(:disabled) {
   background: var(--accent-exec);
   color: var(--accent-exec-text);
 }
@@ -199,6 +228,15 @@ body {
 .btn-exec:disabled {
   opacity: 0.3;
   cursor: not-allowed;
+}
+
+/* Running: inverted and fully visible, although the button is disabled meanwhile */
+.btn-exec.active, .btn-exec.active:disabled {
+  background: var(--accent-active);
+  color: var(--accent-active-text);
+  border-color: var(--accent-active);
+  opacity: 1;
+  cursor: progress;
 }
 
 .btn-compact {
@@ -237,6 +275,56 @@ body {
 
 .log-time {
   color: var(--text-dim);
+}
+
+.log-container.readout {
+  flex-grow: 0;
+  min-height: 80px;
+}
+
+.log-container.compact {
+  flex-grow: 0;
+  max-height: 120px;
+}
+
+/* Analyze: detected targets, click or [↑/↓] to select */
+.target-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.target-row {
+  display: grid;
+  grid-template-columns: 8ch 1fr;
+  gap: 8px;
+  background: transparent;
+  border: var(--border-width) solid var(--border-main);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  font-size: var(--fs-data);
+  padding: 4px 6px;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+
+.target-row:hover, .target-row:focus-visible {
+  border-color: var(--text-main);
+}
+
+.target-row.active {
+  background: var(--accent-active);
+  color: var(--accent-active-text);
+  border-color: var(--accent-active);
+}
+
+.target-row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Wireframe / Center Stage */
@@ -402,6 +490,9 @@ body {
   font-weight: 700;
   padding: 0 4px;
   white-space: nowrap;
+  max-width: 32ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tactical-box:hover .tactical-box-label, .tactical-box.selected .tactical-box-label {
@@ -414,6 +505,22 @@ body {
   gap: 4px;
   padding: 8px;
   border-bottom: var(--border-width) solid var(--border-main);
+}
+
+.heatmap-opacity {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-panel);
+  padding: 4px 8px;
+  border: var(--border-width) solid var(--border-main);
+}
+
+.heatmap-opacity input {
+  accent-color: var(--text-main);
 }
 
 .diff-label {
@@ -490,7 +597,7 @@ body.theme-light {
   outline: none;
 }
 
-.batch-row:hover, .batch-row:focus {
+.batch-row:hover, .batch-row:focus-visible {
   border-color: var(--text-main);
 }
 
@@ -561,8 +668,14 @@ body.theme-light {
   cursor: pointer;
 }
 
+.finding-row:hover {
+  border-color: var(--text-main);
+}
+
 .finding-row.selected {
   border-color: var(--text-main);
+  outline: var(--border-width) solid var(--text-main);
+  outline-offset: -2px;
 }
 
 .finding-row.review-rejected .finding-text {
@@ -620,7 +733,7 @@ body.theme-light {
   outline: none;
 }
 
-.header-btn:hover, .header-btn:focus {
+.header-btn:hover, .header-btn:focus-visible {
   border-color: var(--text-main);
   color: var(--text-main);
 }
@@ -662,7 +775,7 @@ body.theme-light {
   cursor: pointer;
 }
 
-.pair-batch:hover, .pair-batch:focus {
+.pair-batch:hover, .pair-batch:focus-visible {
   background: var(--accent-active);
   color: var(--accent-active-text);
   outline: none;

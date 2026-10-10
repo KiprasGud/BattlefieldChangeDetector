@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..contracts import AnalysisResult, Category
 from .postprocess import to_result
-from .prompts import build_prompt, build_verify_prompt
+from .prompts import TYPE_RULE, build_prompt, build_verify_prompt
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class GeminiError(RuntimeError):
 
 # LLM-facing schema: no sector / report_date, those are computed in postprocess.
 class LLMChange(BaseModel):
-    type: str
+    type: str = Field(description=TYPE_RULE[0].upper() + TYPE_RULE[1:])
     category: Category
     description: str
     location_text: str

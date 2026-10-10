@@ -62,6 +62,49 @@ def test_build_prompt():
     assert "new craters" in p and "Lithuanian" in p
 
 
+def test_preset_and_typed_query_get_the_same_strict_prompt():
+    from app.analysis.presets import build_criteria
+    from app.analysis.prompts import build_verify_prompt
+
+    preset = build_criteria(["craters"])
+    assert preset == "Craters / Artillery Impacts"  # the label itself, nothing generic in its place
+    for build in (build_prompt, build_verify_prompt):
+        # Only the criteria line differs: same framing for a preset and for typed text.
+        assert build(preset) == build("craters").replace("\ncraters\n", f"\n{preset}\n", 1)
+        assert "TARGETS" in build(preset) and f"\n{preset}\n" in build(preset)
+    assert "SCOPE RULE" in build_prompt(preset) and "ONLY if it is one of the TARGETS" in build_prompt(preset)
+
+
+def test_prompt_asks_for_unique_descriptive_labels():
+    p = build_prompt("craters")
+    assert "give each object a unique label according to its distinct characteristics" in p
+    assert "unique label" in gemini_client.LLMChange.model_json_schema()["properties"]["type"]["description"]
+
+
+def test_duplicate_labels_are_made_unique():
+    raw = {"summary": "", "recommendation": "", "changes": [
+        {"type": "Crater", "category": "terrain_change", "description": "", "location_text": "",
+         "confidence": "high", "box": box}
+        for box in ([0, 0, 100, 100], [0, 0, 100, 100], [600, 600, 700, 700], [0, 0, 100, 100])
+    ]}
+    labels = [c.type for c in to_result(raw).changes]
+    assert labels == ["Crater", "Crater (A1)", "Crater (C3)", "Crater (A1) #2"]
+
+
+def test_annotate_draws_non_ascii_label():
+    from app.render.annotate import annotate, badge_label
+
+    assert badge_label("didelė duobė, kelio kraštas") == "didele duobe, kelio krastas"
+    assert badge_label("x" * 50).endswith("...") and len(badge_label("x" * 50)) == 32
+    img = np.full((200, 300, 3), 90, np.uint8)
+    raw = {"summary": "", "recommendation": "", "changes": [
+        {"type": "didelė duobė prie kelio", "category": "terrain_change", "description": "", "location_text": "",
+         "confidence": "high", "box": [100, 900, 300, 1000]},  # right edge: the badge shifts left
+    ]}
+    out = annotate(img, to_result(raw))
+    assert out.shape == img.shape and not np.array_equal(out, img)
+
+
 # --- review categories ----------------------------------------------------------------------------
 
 def test_llm_schema_requires_a_category():

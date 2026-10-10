@@ -9,7 +9,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from ..contracts import AnalysisResult, Change
-from .postprocess import clean_box, sector_for
+from .postprocess import clean_box, sector_for, unique_labels
 
 log = logging.getLogger(__name__)
 
@@ -125,7 +125,8 @@ def analyze_tiled(
         tile_results = list(pool.map(run_tile, tiles))
         full = full_future.result()
 
-    merged = nms(list(full.changes) + [c for tile in tile_results for c in tile])
+    # Tiles label independently, so the same label can come back from two tiles.
+    merged = unique_labels(nms(list(full.changes) + [c for tile in tile_results for c in tile]))
     log.info("Tiled analysis: %d full-image + %d tile detections -> %d after NMS",
              len(full.changes), sum(map(len, tile_results)), len(merged))
     return full.model_copy(update={"changes": merged})

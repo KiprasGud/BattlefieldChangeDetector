@@ -70,6 +70,23 @@ def mostly_uncovered(box: list[int], mask: Optional[np.ndarray]) -> bool:
     return region.size > 0 and region.mean() < 1 - MAX_UNCOVERED
 
 
+def unique_labels(changes: list[Change]) -> list[Change]:
+    """Every change keeps a distinct label ("type"), compared case-insensitively: a repeated label gets its sector
+    appended, then a running number if that is still taken. The prompt asks for unique labels; this guarantees it."""
+    seen: set[str] = set()
+    out = []
+    for c in changes:
+        label = c.type.strip() or "unknown"
+        if label.lower() in seen and c.sector:
+            label = f"{label} ({c.sector})"
+        base, n = label, 2
+        while label.lower() in seen:
+            label, n = f"{base} #{n}", n + 1
+        seen.add(label.lower())
+        out.append(c if label == c.type else c.model_copy(update={"type": label}))
+    return out
+
+
 def to_result(raw: dict, image_b: Optional[np.ndarray] = None) -> AnalysisResult:
     """raw = parsed LLM JSON (dict). Malformed changes are dropped, never raised.
     With image_b, boxes lying mostly in black warp borders are dropped too."""
@@ -93,6 +110,6 @@ def to_result(raw: dict, image_b: Optional[np.ndarray] = None) -> AnalysisResult
     return AnalysisResult(
         report_date=date.today().isoformat(),
         summary=str(raw.get("summary") or ""),
-        changes=changes,
+        changes=unique_labels(changes),
         recommendation=str(raw.get("recommendation") or ""),
     )
