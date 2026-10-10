@@ -16,7 +16,7 @@
    │      A* = A blurred to B's resolution when B is coarser (harmonize_resolution), else A
    │
    ├─3─ analyze(A, B', criteria, aligned) → AnalysisResult (analysis/)      [P2]
-   │      criteria = presets.build_criteria(preset ids, free-text query): one written instruction block
+   │      criteria = presets.build_criteria(preset ids, free-text query): labels + query, comma-joined plain text
    │      Gemini 3.5 Flash-Lite, IMINT prompt + few-shot, JSON-schema output, boxes 0-1000
    │      AI off: no detections (OpenCV only aligns), warning "AI step disabled"
    │
@@ -87,7 +87,7 @@ results (NMS), rendering, cache, offline fallback.
 Gemini (`gemini-3.5-flash-lite`, `backend/app/analysis/`) does exactly two things:
 1. **Detection**: compares A with aligned B against the operator's criteria, returns typed changes with boxes, a
    2-sentence summary and a recommendation. Pre-made target classes (`analysis/presets.py`) and the free-text
-   query reach the model as one criteria block. Only the batch path passes heatmap candidates as hints; the
+   query reach the model as one plain-text query: a selected class sends its label, exactly like typed text. Only the batch path passes heatmap candidates as hints; the
    single-pair `/api/analyze` flow sends none, so every detection there is the model's own.
 2. **Verification** (`ANALYSIS_VERIFY=1`): sees A/B crops of each detection and rejects shadows, lighting,
    alignment artifacts and off-criteria changes. A failed verification keeps the detections.

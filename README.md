@@ -104,15 +104,12 @@ as hints. Full details: [`docs/architecture.md`](docs/architecture.md).
 ## AI detection pathway
 
 Pre-made target classes and the custom query go through **one** code path. The frontend sends the selected class ids
-plus the query text. `presets.build_criteria()` turns them into a single criteria block, which is inserted into the
-Gemini system prompt and reused by the verification pass:
+plus the query text. `presets.build_criteria()` joins each selected class's label and the query into one plain-text
+query, exactly as if the operator had typed it. That text is inserted into the Gemini system prompt and reused by
+the verification pass:
 
 ```
-DETECT THESE TARGET CLASSES:
-- CRATERS / ARTILLERY IMPACTS: new impact craters of any size: roughly circular depressions, usually a darker
-  centre with a lighter ring or spray of ejected soil ... regardless of lighting, scale, viewing angle ...
-- NEW WIRES / TRIPWIRES / COMMS LINES: new thin continuous lines in Image B absent in Image A ...
-OPERATOR CUSTOM QUERY: destroyed artillery near the treeline
+Craters / Artillery Impacts, New Wires / Tripwires / Comms Lines, destroyed artillery near the treeline
 ```
 
 A query on its own is passed through unchanged.

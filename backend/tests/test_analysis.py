@@ -338,12 +338,12 @@ def test_eval_metrics():
 
 # --- preset target classes -----------------------------------------------------------------------
 
-def test_build_criteria_bundles_instructions_and_query():
-    from app.analysis.presets import PRESETS, build_criteria, split_criteria
+def test_build_criteria_joins_labels_and_query_as_plain_text():
+    from app.analysis.presets import build_criteria, split_criteria
     text = build_criteria(["wires", "damage"], "  burnt trucks ")
-    assert PRESETS["wires"].instruction in text and PRESETS["damage"].instruction in text
-    assert PRESETS["craters"].instruction not in text
+    assert text == "New Wires / Tripwires / Comms Lines, Structural Damage / Rubble, burnt trucks"
     assert split_criteria(text) == (["wires", "damage"], "burnt trucks")
+    assert split_criteria("structural damage / rubble, a, b") == (["damage"], "a, b")
     assert build_criteria([], " new tracks ") == "new tracks"  # free text alone is unchanged
     assert split_criteria("new tracks") == ([], "new tracks")
 
@@ -355,10 +355,10 @@ def test_parse_ids_rejects_unknown():
         parse_ids("craters,bogus")
 
 
-def test_mock_filters_by_preset_not_instruction_words():
+def test_mock_filters_by_preset_not_label_words():
     from app.analysis.presets import build_criteria
     a = _sample("pair02")
-    # The wire instruction mentions roads, trees and ditches: only the preset's own tag may count.
+    # Only the preset's own tag may count, not keywords in its label.
     wires = analyze(a, a, build_criteria(["wires"]))
     assert len(wires.changes) == 1
     assert analyze(a, a, build_criteria(["camouflage"])).changes == []

@@ -31,9 +31,9 @@ export default function App() {
   // Tactical State
   const [fileA, setFileA] = useState<File | null>(null);
   const [fileB, setFileB] = useState<File | null>(null);
-  // Pre-made target classes (ids from GET /api/presets); the backend expands each into an AI instruction.
+  // Pre-made target classes (ids from GET /api/presets); the backend sends each label as plain query text.
   const [presets, setPresets] = useState<Preset[]>([]);
-  const [criteria, setCriteria] = useState<string[]>(["vehicles"]);
+  const [criteria, setCriteria] = useState<string[]>([]);
   const [customQuery, setCustomQuery] = useState<string>("");
 
   const toggleCriteria = (val: string) => {
@@ -203,12 +203,17 @@ export default function App() {
     setStage("queued");
     addLog(`[EXEC] AI scan: ${[...criteria, ...(query ? ["custom query"] : [])].join(", ")}`);
 
+    // Progress is polled every 400 ms: announce the AI phase once, not on every poll.
+    let announcedAi = false;
     try {
       const response = await analyze(
         fileA, fileB, { presets: criteria, query }, "en", false,
         (progress: JobProgress) => {
           setStage(progress.stage);
-          addLog(`[PROC] Stage advanced: ${progress.stage}`);
+          if (progress.stage === "ai" && !announcedAi) {
+            announcedAi = true;
+            addLog("[PROC] ANALYZING DATA");
+          }
         },
         isCancelled
       );

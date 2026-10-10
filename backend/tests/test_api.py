@@ -132,7 +132,7 @@ def test_analyze_presets_only_uses_ai_pathway():
     assert r.status_code == 200
     assert [c["sector"] for c in r.json()["result"]["changes"]] == ["B3"]  # pair01 crater only, not the tracks
     job = client.get(f"/api/jobs/{r.json()['job_id']}").json()
-    assert job["criteria"].startswith("DETECT THESE TARGET CLASSES:") and "CRATERS" in job["criteria"]
+    assert job["criteria"] == "Craters / Artillery Impacts"  # same plain-text pathway as a typed query
 
 
 def test_analyze_presets_plus_custom_query():
@@ -140,7 +140,7 @@ def test_analyze_presets_plus_custom_query():
     assert r.status_code == 200
     assert {c["sector"] for c in r.json()["result"]["changes"]} == {"B3", "D1"}
     job = client.get(f"/api/jobs/{r.json()['job_id']}").json()
-    assert job["criteria"].endswith("OPERATOR CUSTOM QUERY: anything near the treeline")
+    assert job["criteria"].endswith(", anything near the treeline")
 
 
 def test_analyze_unknown_preset_error():

@@ -84,7 +84,7 @@ def map_box(box: list[int], H: np.ndarray, src_shape, dst_shape) -> Optional[lis
 
 
 def criteria_tags(criteria: str) -> set[str]:
-    """Preset tags plus keyword tags of the free text only (preset instructions would match everything)."""
+    """Preset tags plus keyword tags of the free text only (preset labels would match extra tags)."""
     preset_ids, custom = split_criteria(criteria)
     text = custom.lower()
     tags = {tag for pid in preset_ids for tag in PRESETS[pid].tags}
