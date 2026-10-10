@@ -87,16 +87,28 @@ def run(
         pass
     timings["heatmap"] = round(time.perf_counter() - t0, 3)
 
-    # Stage 3: AI Analysis
+    # Stage 3: AI Analysis (with automatic offline fallback)
     if stage_callback:
         stage_callback("ai", timings)
     t0 = time.perf_counter()
-    sig = inspect.signature(analyze)
-    if "hints" in sig.parameters and hints is not None:
-        result = analyze(img_a, aligned.aligned_b, criteria, lang, hints=hints)
-    else:
-        result = analyze(img_a, aligned.aligned_b, criteria, lang)
+    offline = False
+    try:
+        sig = inspect.signature(analyze)
+        if "hints" in sig.parameters and hints is not None:
+            result = analyze(img_a, aligned.aligned_b, criteria, lang, hints=hints)
+        else:
+            result = analyze(img_a, aligned.aligned_b, criteria, lang)
+    except Exception as e:
+        # Automatic offline fallback: switch to mock fixture when Gemini fails
+        try:
+            from .analysis.mock import analyze_mock
+            result = analyze_mock(img_a, aligned.aligned_b, criteria)
+            offline = True
+            warnings.append(f"OFFLINE MODE: Gemini API unavailable ({type(e).__name__}). Using fixture data.")
+        except Exception as fallback_err:
+            raise RuntimeError(f"Both Gemini and mock fallback failed: {fallback_err}") from e
     timings["ai"] = round(time.perf_counter() - t0, 3)
+
 
     # Stage 4: Render
     if stage_callback:

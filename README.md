@@ -4,7 +4,13 @@ Operator uploads "before" and "after" drone photos + criteria (e.g. "new vehicle
 
 See `docs/architecture.md`, `docs/api.md`, and **`docs/team.md`** (instructions for the 3 people).
 
-## Quick start
+## Quick start (Windows — one command)
+```powershell
+.\start.ps1          # Live mode (requires GEMINI_API_KEY in backend\.env)
+.\start.ps1 mock     # Offline/demo rehearsal mode — no API key needed
+```
+
+### Manual start
 ```
 cd backend
 python -m venv .venv && .venv\Scripts\activate
@@ -36,16 +42,18 @@ Phase 2 (~12 h) is in `docs/team.md`:
 5. **M4 (~12 h)**: tiling, one-command start, offline mode; feature freeze at 11 h, last hour = rehearsal.
 
 ## Demo Script & Fallback Rehearsal
-1. **Start Services**:
-   - Backend: `cd backend && uvicorn app.main:app --reload`
-   - Frontend: `cd frontend && npm run dev` (opens `http://localhost:5173`)
-2. **Rehearsal with Fallback (`MOCK_LLM=1`)**:
-   - In `backend/.env`, set `MOCK_LLM=1` to guarantee instant responses without external API latency or quota limits.
+1. **One-Command Start (Recommended)**:
+   - `.\start.ps1 mock` — starts backend + frontend, OFFLINE mode, no API key needed.
+   - `.\start.ps1` — live mode, requires `GEMINI_API_KEY` in `backend/.env`.
+2. **Automatic Offline Fallback**:
+   - If Gemini API is overloaded / unavailable during demo, the pipeline silently switches to fixture data and shows an **OFFLINE MODE** banner in the UI.
 3. **Demo Flow**:
-   - Click **Sample 01 - Treeline & Roadway** in the top demo bar to instantly populate Image A & Image B.
+   - Click **Sample 01 - Treeline & Roadway** to populate Image A & Image B instantly.
    - Click preset chips (e.g., `+ New vehicle tracks`, `+ Craters / digging`).
-   - Click **Execute Change Detection**.
-   - Use the **Before/After Slider** to interactively sweep between baseline and recon imagery.
-   - Click change items in the tactical report to inspect target boxes directly in the HUD.
+   - Click **Execute Change Detection** and watch the live **stage progress bar**.
+   - Use **Before/After Slider** to sweep baseline vs recon.
+   - Click change items in the tactical report to highlight targets on imagery.
+   - Click **🖨️ Print Briefing** for a printer-ready operator report.
+   - Click **📂 Mission History** to recall and re-open past missions.
    - Click **Copy Report JSON** or **Download JSON** for operator export.
 
