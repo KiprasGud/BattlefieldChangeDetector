@@ -14,7 +14,7 @@ REVIEW_STATUSES = ("pending", "accepted", "rejected")
 
 _BATCH_COLUMNS = {
     "site", "project", "name_a", "name_b", "tag_a", "tag_b", "path_a", "path_b", "kind_a", "kind_b", "signature",
-    "ai_enabled", "status", "stage", "progress", "frames_a", "frames_b", "matched_pairs", "pairs_count",
+    "ai_enabled", "criteria", "status", "stage", "progress", "frames_a", "frames_b", "matched_pairs", "pairs_count",
     "error_message",
 }
 _LEG_COLUMNS = {
@@ -61,6 +61,7 @@ def init_batch_db() -> None:
                 kind_a TEXT, kind_b TEXT,   -- 'image' | 'video', from file content
                 signature TEXT,
                 ai_enabled INTEGER,
+                criteria TEXT,          -- what the AI was asked to find, fixed when queued (NULL: before criteria)
                 status TEXT,            -- 'queued', 'running', 'done', 'error'
                 stage TEXT,             -- 'queued', 'extracting', 'matching', 'comparing', 'done', 'error'
                 progress TEXT,          -- e.g. 'Day1→Day2 3/12' while comparing pairs
@@ -125,7 +126,8 @@ def init_batch_db() -> None:
 
 def _migrate(conn) -> None:
     """Databases from before project batches: add the new columns and give every old batch its one leg."""
-    for table, column, kind in (("batches", "project", "TEXT"), ("frame_pairs", "leg_idx", "INTEGER")):
+    for table, column, kind in (("batches", "project", "TEXT"), ("batches", "criteria", "TEXT"),
+                                ("frame_pairs", "leg_idx", "INTEGER")):
         if column not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
     conn.execute("UPDATE batches SET project = lower(site) WHERE project IS NULL")

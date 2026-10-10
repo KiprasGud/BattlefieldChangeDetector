@@ -23,11 +23,12 @@ import numpy as np
 from . import pipeline
 from .alignment import align, warp_into
 from .analysis import analyze, use_mock
+from .analysis.presets import build_criteria
 from .contracts import AlignResult
 from .ingest.media import load_still, media_kind
 from .ingest.naming import MediaName, pairs_for
 from .render import annotate
-from .settings import ai_enabled, auto_batch_enabled
+from .settings import ai_enabled, auto_batch_enabled, batch_target
 from .storage import batches as store
 from .video.extract import FRAME_LIMIT, Frame, extract_frames, frame_max_side
 from .video.match import MAX_PAIRS, MatchedPair, describe, match_flights
@@ -46,7 +47,9 @@ _lock = threading.Lock()
 
 
 def batch_criteria() -> str:
-    return os.getenv("BATCH_CRITERIA") or DEFAULT_CRITERIA
+    """Criteria for batches queued now: the dashboard's target classes and query (same text as /api/analyze builds),
+    else BATCH_CRITERIA, else any real change."""
+    return build_criteria(*batch_target()) or os.getenv("BATCH_CRITERIA") or DEFAULT_CRITERIA
 
 
 def max_pairs() -> int:
@@ -84,7 +87,7 @@ def _source_frames(path: Path, work_dir: Path, label: str, warnings: list[str]) 
 
 def _compare(
     batch_id: str, out_dir: Path, leg_idx: int, idx: int, fa: Frame, fb: Frame, match: MatchedPair, use_ai: bool,
-    warnings: list[str],
+    criteria: str, warnings: list[str],
 ) -> bool:
     """Align, diff and (optionally) analyze one matched pair; store it when it shows a difference."""
     img_a, img_b = _read(fa), _read(fb)
@@ -104,7 +107,7 @@ def _compare(
     result, source = pipeline.cv_result(hints), "cv"
     if use_ai:
         try:
-            result = analyze(img_a, aligned.aligned_b, batch_criteria(), "en", hints=hints, aligned=True)
+            result = analyze(img_a, aligned.aligned_b, criteria, "en", hints=hints, aligned=True)
             source = "ai"
         except Exception as e:
             warnings.append(f"Pair {label}: Gemini failed ({str(e)[:120]}); heatmap regions kept instead.")
@@ -137,7 +140,7 @@ def _leg_label(leg: dict) -> str:
     return f"{leg['tag_a']}→{leg['tag_b']}"
 
 
-def _process_leg(batch_id: str, out_dir: Path, leg: dict, use_ai: bool) -> None:
+def _process_leg(batch_id: str, out_dir: Path, leg: dict, use_ai: bool, criteria: str) -> None:
     """Match and compare one leg's two sources. Failures are recorded on the leg, never raised."""
     for idx in store.clear_leg_pairs(batch_id, leg["idx"]):  # a resumed or retried leg starts clean
         shutil.rmtree(out_dir / f"pair_{idx:02d}", ignore_errors=True)
@@ -173,7 +176,7 @@ def _process_leg(batch_id: str, out_dir: Path, leg: dict, use_ai: bool) -> None:
             fa, fb = frames_a[p.a], frames_b[p.b]
             try:
                 if _compare(batch_id, out_dir, leg["idx"], store.next_pair_idx(batch_id), fa, fb, p, use_ai,
-                            warnings):
+                            criteria, warnings):
                     saved += 1
             except Exception as e:  # one bad pair must not cost the rest of the leg
                 log.exception("Batch %s %s: pair A@%s / B@%s failed", batch_id, label, _clock(fa.t), _clock(fb.t))
@@ -224,6 +227,7 @@ def process_batch(batch_id: str) -> None:
             return
         store.update_batch(batch_id, status="running", stage="extracting", progress="", error_message=None)
     use_ai, ai_warning = bool(row["ai_enabled"]), None
+    criteria = row["criteria"] or batch_criteria()  # batches from before per-batch criteria have none stored
     if use_ai and use_mock():
         use_ai = False
         ai_warning = "AI requested but unavailable (MOCK_LLM=1 or no GEMINI_API_KEY): CV results only."
@@ -236,7 +240,7 @@ def process_batch(batch_id: str) -> None:
                     _finish(batch_id, ai_warning)
                     return
                 store.update_leg(leg["id"], status="running", error_message=None)
-            _process_leg(batch_id, out_dir, leg, use_ai)
+            _process_leg(batch_id, out_dir, leg, use_ai, criteria)
     except Exception as e:
         log.exception("Batch %s failed", batch_id)
         store.fail_batch(batch_id, str(e) or type(e).__name__)
@@ -269,7 +273,7 @@ def queue_project(items: list[MediaName], hashes: dict[Path, str], ai: Optional[
             store.create_batch(
                 batch_id, site=first.key, project=first.site, name_a=first.path.name, name_b=last.path.name,
                 tag_a=first.tag, tag_b=last.tag, path_a=str(first.path), path_b=str(last.path), signature=signature,
-                ai_enabled=use_ai,
+                ai_enabled=use_ai, criteria=batch_criteria(),
             )
             known: dict[str, dict] = {}
         else:
@@ -294,7 +298,7 @@ def queue_project(items: list[MediaName], hashes: dict[Path, str], ai: Optional[
                       path_a=str(first.path), path_b=str(last.path), signature=signature)
         if row["status"] in ("done", "error"):
             store.update_batch(batch_id, status="queued", stage="queued", progress="", ai_enabled=int(use_ai),
-                               **epochs)
+                               criteria=batch_criteria(), **epochs)
             return batch_id
         store.update_batch(batch_id, **epochs)  # queued or running: the worker picks the new legs up itself
         return None
@@ -321,7 +325,7 @@ def rerun_batch(batch_id: str) -> str:
     new_id = uuid.uuid4().hex[:12]
     store.create_batch(new_id, **{k: row[k] for k in (
         "site", "project", "name_a", "name_b", "tag_a", "tag_b", "path_a", "path_b", "signature")},
-        ai_enabled=ai_enabled())
+        ai_enabled=ai_enabled(), criteria=batch_criteria())
     for leg in legs:
         store.add_leg(new_id, **{k: leg[k] for k in (
             "tag_a", "tag_b", "name_a", "name_b", "path_a", "path_b", "signature")})

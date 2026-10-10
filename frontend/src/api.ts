@@ -295,6 +295,7 @@ export interface Batch {
   kind_a: "image" | "video" | null;
   kind_b: "image" | "video" | null;
   ai_enabled: boolean;
+  criteria: string | null; // what the AI was asked to find, fixed when queued (null: older batch)
   status: "queued" | "running" | "done" | "error";
   stage: string;
   progress: string;
@@ -320,6 +321,9 @@ export interface PipelineSettings {
   ai_enabled: boolean;
   ai_available: boolean;
   auto_batch: boolean; // false: new files stay in the inbox unbatched, the worker is paused
+  batch_presets: string[]; // target class ids for batches queued from now on
+  batch_query: string; // free-text query for batches queued from now on
+  batch_criteria: string; // the text the AI gets: presets + query, or the "any real change" default
   queued_count: number;
   watch_enabled: boolean;
   watch_dir: string;
@@ -379,7 +383,9 @@ export const fetchInbox = () => getJson<InboxState>("/api/inbox", "inbox");
 export const fetchBatches = (limit: number = 50) => getJson<Batch[]>(`/api/batches?limit=${limit}`, "batches");
 export const fetchBatch = (id: string) => getJson<BatchDetail>(`/api/batches/${id}`, `batch ${id}`);
 
-export const updateSettings = (patch: Partial<Pick<PipelineSettings, "ai_enabled" | "auto_batch">>) =>
+export const updateSettings = (
+  patch: Partial<Pick<PipelineSettings, "ai_enabled" | "auto_batch" | "batch_presets" | "batch_query">>
+) =>
   sendJson<PipelineSettings>("/api/settings", "PUT", patch, "Settings update failed");
 
 /** Flush the batch queue (only while automatic batching is stopped); its files go back to the inbox, unbatched. */

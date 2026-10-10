@@ -72,6 +72,7 @@ export default function ReportViewer({ batch, onClose, onExport }: Props) {
           <span>SITE: {batch.site}</span>
           <span>LEGS: {batch.legs.map((l) => `${l.tag_a}→${l.tag_b}`).join(", ") || "-"}</span>
           <span>AI: {batch.ai_enabled ? "ON" : "OFF"}</span>
+          <span>TARGETS: {batch.ai_enabled ? batch.criteria ?? "ALL CHANGES" : "ALL CHANGES (CV ONLY)"}</span>
           <span>STATUS: {batch.status.toUpperCase()}</span>
           <span>BATCH: {batch.id}</span>
         </div>

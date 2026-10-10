@@ -74,13 +74,17 @@ batch, with one *leg* per consecutive epoch step (`Day1→Day2`, `Day2→Day5`);
 [architecture.md](architecture.md#watch-folder-batch-pipeline-drone-video-and-image-pairs).
 
 ### GET /api/settings · PUT /api/settings
-`200 {"ai_enabled": true, "ai_available": false, "auto_batch": true, "queued_count": 0, "watch_enabled": true, "watch_dir": "...", "frame_fps": 0.5, "max_pairs": 20}`
+`200 {"ai_enabled": true, "ai_available": false, "auto_batch": true, "batch_presets": [], "batch_query": "", "batch_criteria": "Any real physical change ...", "queued_count": 0, "watch_enabled": true, "watch_dir": "...", "frame_fps": 0.5, "max_pairs": 20}`
 - `PUT` body `{"ai_enabled": false}` switches the AI step for batches queued from now on and for `/api/analyze`, until
   restart (`AI_ENABLED` is the default). `ai_available` is `false` when `MOCK_LLM=1` or no `GEMINI_API_KEY`: batches
   then fall back to CV results.
 - `PUT` body `{"auto_batch": false}` stops automatic batching until restart (`AUTO_BATCH` is the default): settled
   files stay in the inbox unbatched and the worker pauses after the batch it is running. `{"auto_batch": true}`
-  batches every project waiting in the inbox and resumes the worker. Both fields are optional.
+  batches every project waiting in the inbox and resumes the worker.
+- `PUT` body `{"batch_presets": ["craters"], "batch_query": "new trenches"}` sets what the AI looks for in batches
+  queued from now on, until restart: preset ids from `/api/presets` plus free text, joined into the same criteria text
+  `/api/analyze` builds (`batch_criteria`). Unknown id: `400`. Neither set: `BATCH_CRITERIA`, else any real change.
+  Each batch stores its `criteria` when queued; it has no effect on CV-only batches. All fields are optional.
 
 ### POST /api/queue/clear
 Only while automatic batching is stopped (`409` otherwise). Flushes every `queued` batch; the running one is left
@@ -103,7 +107,7 @@ becomes a leg of the project's batch, as automatic batching would add it.
 running (it picks the leg up) or the pair was batched before. `404` watcher off or not a consecutive inbox pair.
 
 ### GET /api/batches?limit=50
-Most recent first, one row per project batch: `[{"id", "site", "project", "legs_count", "name_a", "name_b", "tag_a", "tag_b", "kind_a", "kind_b", "ai_enabled", "status", "stage", "progress", "frames_a", "frames_b", "matched_pairs", "pairs_count", "timings", "warnings", "error_message", "findings_count", "pending_count", "accepted_count", "rejected_count", ...}]`
+Most recent first, one row per project batch: `[{"id", "site", "project", "legs_count", "name_a", "name_b", "tag_a", "tag_b", "kind_a", "kind_b", "ai_enabled", "criteria", "status", "stage", "progress", "frames_a", "frames_b", "matched_pairs", "pairs_count", "timings", "warnings", "error_message", "findings_count", "pending_count", "accepted_count", "rejected_count", ...}]`
 
 `*_a` is the project's first epoch, `*_b` its latest. Stages: `"queued"` ➔ `"extracting"` ➔ `"matching"` ➔
 `"comparing"` (`progress` = `"Day1→Day2 3/12"`) ➔ `"done"` | `"error"`, repeated per leg. The batch is `error` only

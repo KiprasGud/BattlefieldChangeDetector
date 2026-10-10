@@ -36,3 +36,18 @@ def set_auto_batch(value: Optional[bool]) -> None:
     """Override AUTO_BATCH until restart; None goes back to the environment value."""
     global _auto_batch_override
     _auto_batch_override = value
+
+
+_batch_target: tuple[list[str], str] = ([], "")
+
+
+def batch_target() -> tuple[list[str], str]:
+    """What batches queued from now on tell the AI to look for: (preset ids, free-text query). Both empty: the
+    default "any real change" criteria (batch.batch_criteria)."""
+    return list(_batch_target[0]), _batch_target[1]
+
+
+def set_batch_target(preset_ids: list[str], query: str) -> None:
+    """Set the batch target until restart; ids must already be validated (presets.parse_ids)."""
+    global _batch_target
+    _batch_target = (list(preset_ids), query.strip())

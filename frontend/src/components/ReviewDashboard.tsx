@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   batchPair,
   clearQueue,
   fetchBatch,
   fetchBatches,
   fetchInbox,
+  fetchPresets,
   fetchSettings,
   rerunBatch,
   reportUrl,
@@ -16,6 +17,7 @@ import {
   type InboxPair,
   type InboxState,
   type PipelineSettings,
+  type Preset,
   type ReportFormat,
   type ReviewStatus,
 } from "../api";
@@ -82,6 +84,10 @@ export default function ReviewDashboard({ onExit }: Props) {
   const [reportOpen, setReportOpen] = useState(false);
   // Pairs batched by hand that the inbox poll does not show as batched yet.
   const [pendingPairs, setPendingPairs] = useState<Set<string>>(() => new Set());
+  // Target classes for new batches; the query is committed on Enter or blur, not per keystroke.
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [queryDraft, setQueryDraft] = useState("");
+  const queryFocused = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -105,6 +111,17 @@ export default function ReviewDashboard({ onExit }: Props) {
   useEffect(() => {
     if (!selectedId && batches.length) setSelectedId(batches[0].id);
   }, [batches, selectedId]);
+
+  useEffect(() => {
+    fetchPresets()
+      .then(setPresets)
+      .catch((e) => setStatusLine(`[ERR] TARGET CLASSES UNAVAILABLE: ${e?.message || String(e)}`));
+  }, []);
+
+  const savedQuery = settings?.batch_query ?? "";
+  useEffect(() => {
+    if (!queryFocused.current) setQueryDraft(savedQuery);
+  }, [savedQuery]);
 
   // A pending pair is settled once the poll reports it batched (or it left the inbox).
   useEffect(() => {
@@ -203,6 +220,26 @@ export default function ReviewDashboard({ onExit }: Props) {
     } catch (e: any) {
       setStatusLine(`[ERR] ${e?.message || String(e)}`);
     }
+  };
+
+  const saveTarget = async (patch: { batch_presets?: string[]; batch_query?: string }) => {
+    try {
+      const s = await updateSettings(patch);
+      setSettings(s);
+      setStatusLine(`[SYS] NEW BATCHES TARGET: ${s.batch_criteria.toUpperCase()}`);
+    } catch (e: any) {
+      setStatusLine(`[ERR] ${e?.message || String(e)}`);
+    }
+  };
+
+  const toggleTarget = (id: string) => {
+    if (!settings) return;
+    const ids = settings.batch_presets;
+    saveTarget({ batch_presets: ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id] });
+  };
+
+  const commitQuery = () => {
+    if (settings && queryDraft.trim() !== settings.batch_query) saveTarget({ batch_query: queryDraft });
   };
 
   const clearBatchQueue = async () => {
@@ -447,6 +484,48 @@ export default function ReviewDashboard({ onExit }: Props) {
           </div>
 
           <div className="control-group">
+            <div className="control-label">TARGET CRITERIA (AI) // NEW BATCHES</div>
+            <div className="toggle-grid">
+              {presets.map((p) => {
+                const on = settings?.batch_presets.includes(p.id) ?? false;
+                return (
+                  <button
+                    key={p.id}
+                    className={`tactical-toggle preset-toggle ${on ? "active" : ""}`}
+                    aria-pressed={on}
+                    disabled={!settings}
+                    onClick={() => toggleTarget(p.id)}
+                  >
+                    {p.label.toUpperCase()}
+                  </button>
+                );
+              })}
+            </div>
+            <input
+              type="text"
+              className="tactical-input"
+              placeholder="custom query, e.g. 'destroyed artillery' [ENTER]"
+              value={queryDraft}
+              disabled={!settings}
+              onChange={(e) => setQueryDraft(e.target.value)}
+              onFocus={() => (queryFocused.current = true)}
+              onBlur={() => {
+                queryFocused.current = false;
+                commitQuery();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+            />
+            <div className="fs-xs mono text-dim">
+              {!settings?.batch_presets.length && !settings?.batch_query
+                ? "NONE PICKED: ALL CHANGES (DEFAULT)"
+                : `AI LOOKS FOR: ${settings.batch_criteria.toUpperCase()}`}
+              {settings && !settings.ai_enabled && " · NO EFFECT WHILE AI IS OFF"}
+            </div>
+          </div>
+
+          <div className="control-group">
             <div className="control-label">INBOX // {inbox?.watching ? "WATCHING" : "WATCHER OFF"}</div>
             <div className="fs-xs mono text-dim inbox-path">{inbox?.folder}</div>
             {inbox?.waiting.map((n) => (
@@ -511,7 +590,12 @@ export default function ReviewDashboard({ onExit }: Props) {
             {batches.map((b) => {
               const s = batchState(b);
               return (
-                <button key={b.id} className={`batch-row ${b.id === selectedId ? "active" : ""}`} onClick={() => setSelectedId(b.id)}>
+                <button
+                  key={b.id}
+                  className={`batch-row ${b.id === selectedId ? "active" : ""}`}
+                  title={b.ai_enabled ? `TARGETS: ${b.criteria ?? "ALL CHANGES"}` : "CV ONLY: ALL CHANGES"}
+                  onClick={() => setSelectedId(b.id)}
+                >
                   <div className="batch-row-line">
                     <span>{b.site}</span>
                     <span>

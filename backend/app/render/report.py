@@ -48,6 +48,13 @@ def _totals(pairs: list[dict[str, Any]]) -> dict[str, int]:
     return totals
 
 
+def targets(detail: dict[str, Any]) -> str:
+    """What the batch was searched for: its criteria when the AI ran, else every heatmap region."""
+    if not detail.get("ai_enabled"):
+        return "All changes (CV only)"
+    return detail.get("criteria") or "All changes"
+
+
 def build_json(detail: dict[str, Any]) -> dict[str, Any]:
     pairs = verified_pairs(detail)
     return {
@@ -55,6 +62,7 @@ def build_json(detail: dict[str, Any]) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "batch": {k: detail.get(k) for k in (
             "id", "site", "name_a", "name_b", "tag_a", "tag_b", "kind_a", "kind_b", "ai_enabled", "created_at")},
+        "targets": targets(detail),
         "legs": [
             {"leg": leg["idx"], "label": leg_label(leg), **{k: leg.get(k) for k in (
                 "tag_a", "tag_b", "name_a", "name_b", "kind_a", "kind_b", "status")}}
@@ -172,6 +180,7 @@ def build_html(detail: dict[str, Any], batch_dir: Path) -> str:
   <td>A: {e(str(detail.get('name_a') or '-'))} ({e(str(detail.get('kind_a') or '?'))})</td>
   <td>B: {e(str(detail.get('name_b') or '-'))} ({e(str(detail.get('kind_b') or '?'))})</td>
   <td>AI: {'ON' if detail.get('ai_enabled') else 'OFF'}</td>
+  <td>TARGETS: {e(targets(detail))}</td>
   <td>GENERATED: {generated}</td>
 </tr></table>
 <table style="max-width: 420px"><tr><th>Category</th><th>Verified</th></tr>{total_rows}</table>
@@ -257,6 +266,7 @@ def _pdf_header(pdf: _Pdf, detail: dict[str, Any], totals: dict[str, int]) -> No
         ("A", f"{detail.get('name_a') or '-'} ({detail.get('kind_a') or '?'})"),
         ("B", f"{detail.get('name_b') or '-'} ({detail.get('kind_b') or '?'})"),
         ("AI", "ON" if detail.get("ai_enabled") else "OFF"),
+        ("Targets", targets(detail)),
         ("Generated", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")),
     ]
     for key, value in meta:

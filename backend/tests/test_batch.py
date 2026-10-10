@@ -35,6 +35,7 @@ def batch_env(tmp_path, monkeypatch):
     yield inbox, submitted
     settings.set_ai_enabled(None)
     settings.set_auto_batch(None)
+    settings.set_batch_target([], "")
     batch.worker.resume()
 
 
@@ -154,6 +155,30 @@ def test_ai_findings_keep_their_category(batch_env, monkeypatch):
     pair = d["pairs"][0]
     assert pair["source"] == "ai" and pair["summary"] == "One new structure."
     assert [(f["category"], f["type"]) for f in pair["findings"]] == [("new_structure", "bunker")]
+    assert calls[0][0] == batch.DEFAULT_CRITERIA and d["criteria"] == batch.DEFAULT_CRITERIA  # nothing picked
+
+
+def test_batch_target_criteria_reach_the_model(batch_env, monkeypatch):
+    inbox, _ = batch_env
+    calls = []
+    monkeypatch.setattr(batch, "use_mock", lambda: False)
+    monkeypatch.setattr(batch, "analyze", _fake_gemini(calls))
+    r = client.put("/api/settings", json={"ai_enabled": True, "batch_presets": ["craters"], "batch_query": " new trenches "})
+    body = r.json()
+    wanted = "Craters / Artillery Impacts, new trenches"  # same text /api/analyze builds
+    assert (body["batch_presets"], body["batch_query"], body["batch_criteria"]) == (["craters"], "new trenches", wanted)
+    assert client.put("/api/settings", json={"batch_presets": ["nope"]}).status_code == 400
+    assert client.put("/api/settings", json={"auto_batch": True}).json()["batch_presets"] == ["craters"]  # kept
+
+    d = _run_stills(inbox)
+    assert [c[0] for c in calls] == [wanted] and d["criteria"] == wanted
+    html = client.get(f"/api/batches/{d['id']}/report?format=html").text
+    assert "TARGETS: Craters / Artillery Impacts, new trenches" in html
+
+    # A picked target applies to batches queued from now on; a queued batch keeps its own.
+    client.put("/api/settings", json={"batch_presets": [], "batch_query": ""})
+    assert client.get("/api/settings").json()["batch_criteria"] == batch.DEFAULT_CRITERIA
+    assert store.get_batch(d["id"])["criteria"] == wanted
 
 
 def test_gemini_failure_keeps_cv_regions(batch_env, monkeypatch):
@@ -434,6 +459,6 @@ def test_old_database_gets_one_leg_per_batch(tmp_path, monkeypatch):
     store.init_batch_db()
     store.init_batch_db()  # idempotent
     d = store.batch_detail("old1")
-    assert d["project"] == "site_a" and d["legs_count"] == 1
+    assert d["project"] == "site_a" and d["legs_count"] == 1 and d["criteria"] is None
     assert [(leg["tag_a"], leg["tag_b"], leg["status"]) for leg in d["legs"]] == [("Day1", "Day2", "done")]
     assert (d["pairs"][0]["leg_idx"], d["pairs"][0]["tag_a"]) == (1, "Day1")

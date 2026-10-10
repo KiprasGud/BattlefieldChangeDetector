@@ -265,6 +265,8 @@ def get_jobs_history(limit: int = Query(50, ge=1, le=100)):
 class SettingsUpdate(BaseModel):
     ai_enabled: Optional[bool] = None
     auto_batch: Optional[bool] = None
+    batch_presets: Optional[list[str]] = None  # target class ids (GET /api/presets) for batches queued from now on
+    batch_query: Optional[str] = None  # free-text query for batches queued from now on
 
 
 class ReviewUpdate(BaseModel):
@@ -273,10 +275,14 @@ class ReviewUpdate(BaseModel):
 
 def _settings() -> dict[str, Any]:
     svc = watcher.service()
+    batch_presets, batch_query = settings.batch_target()
     return {
         "ai_enabled": settings.ai_enabled(),
         "ai_available": not use_mock(),
         "auto_batch": settings.auto_batch_enabled(),
+        "batch_presets": batch_presets,
+        "batch_query": batch_query,
+        "batch_criteria": batch.batch_criteria(),
         "queued_count": batch_store.queued_count(),
         "watch_enabled": svc is not None,
         "watch_dir": str(svc.folder if svc else watcher.watch_dir()),
@@ -294,7 +300,17 @@ def get_settings():
 def put_settings(update: SettingsUpdate):
     """Until restart: ai_enabled switches the AI step for batches queued from now on (and for /api/analyze);
     auto_batch starts or stops automatic batching. Stopping keeps new files in the inbox and pauses the worker after
-    the batch it is running; starting resumes the worker and batches everything waiting in the inbox."""
+    the batch it is running; starting resumes the worker and batches everything waiting in the inbox.
+    batch_presets / batch_query: what the AI looks for in batches queued from now on (a field left out is kept);
+    neither set means any real change."""
+    if update.batch_presets is not None or update.batch_query is not None:
+        presets, query = settings.batch_target()
+        try:
+            if update.batch_presets is not None:
+                presets = parse_ids(",".join(update.batch_presets))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        settings.set_batch_target(presets, query if update.batch_query is None else update.batch_query)
     if update.ai_enabled is not None:
         settings.set_ai_enabled(update.ai_enabled)
     if update.auto_batch is not None:
