@@ -3,7 +3,7 @@ from typing import Optional
 
 LANGUAGES = {"en": "English", "lt": "Lithuanian"}
 
-PROMPT_VERSION = 2  # bump on any prompt change: it is part of the analysis cache key
+PROMPT_VERSION = 3  # bump on any prompt change: it is part of the analysis cache key
 
 IMAGE_B_ALIGNED = (
     "Image B: the present, already geometrically aligned to Image A. It may come from a different camera, resolution "
@@ -36,6 +36,11 @@ OUTPUT RULES:
 - "box" is [ymin, xmin, ymax, xmax] in Image B, normalized to 0-1000 (0,0 = top-left). Make the box tight around the changed area.
 - One entry per distinct change. If nothing matches the criteria, return an empty "changes" list. Never invent changes.
 - "confidence": "high", "medium" or "low" (always these English words).
+- "category": exactly one of these codes (always these English codes):
+  "missing_object" = equipment, vehicles or other objects visible in Image A that are gone from Image B;
+  "new_structure" = new buildings, fortifications, barriers, emplacements or other construction in Image B;
+  "terrain_change" = craters, vehicle tracks, earthworks, trenches, vegetation loss, felled trees, flooding or burn scars;
+  "unknown_anomaly" = a real change that fits none of the above (e.g. a newly appeared vehicle, damage to an existing building).
 - "location_text": short human description of where it is (e.g. "upper right, near the road junction").
 - "summary": at most 2 sentences on overall sector activity.
 - "recommendation": one concrete next action for the operator.
@@ -43,11 +48,13 @@ OUTPUT RULES:
 """
 
 FEW_SHOT = """REFERENCE EXAMPLES:
-- Criteria "new tracks": a brown or flattened line across grass/field in B that is absent in A -> type "vehicle tracks", confidence high. May indicate a new supply route.
-- Criteria "new craters": dark roughly circular spots with a lighter ring of ejected soil around them -> type "crater". Plain dark blobs without an ejecta ring are often tree shadows -> do not report, or confidence low.
-- Criteria "felled trees": tree crowns present in A missing in B, or a long trunk shape lying on the ground, often with a lighter stump/gap -> type "felled tree".
-- Criteria "cables / lines": a new thin continuous line in B (often straight or gently curved, crossing terrain features) absent in A -> type "cable / line", usually confidence medium because it is hard to see.
-- Criteria "digging / earthworks": fresh soil (lighter or darker than surroundings, sharp edges), new trenches or berms -> type "earthworks".
+- Criteria "new tracks": a brown or flattened line across grass/field in B that is absent in A -> type "vehicle tracks", category "terrain_change", confidence high. May indicate a new supply route.
+- Criteria "new craters": dark roughly circular spots with a lighter ring of ejected soil around them -> type "crater", category "terrain_change". Plain dark blobs without an ejecta ring are often tree shadows -> do not report, or confidence low.
+- Criteria "felled trees": tree crowns present in A missing in B, or a long trunk shape lying on the ground, often with a lighter stump/gap -> type "felled tree", category "terrain_change".
+- Criteria "cables / lines": a new thin continuous line in B (often straight or gently curved, crossing terrain features) absent in A -> type "cable / line", category "unknown_anomaly", usually confidence medium because it is hard to see.
+- Criteria "digging / earthworks": fresh soil (lighter or darker than surroundings, sharp edges), new trenches or berms -> type "earthworks", category "terrain_change".
+- Criteria "equipment": a vehicle, container or gun position visible in A with bare ground in the same spot in B -> type "vehicle removed", category "missing_object".
+- Criteria "construction": a new roof, wall, bunker or barrier line in B where A shows open ground -> type "new structure", category "new_structure".
 """
 
 

@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -7,6 +8,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ["MOCK_LLM"] = "1"
+os.environ["WATCH_ENABLED"] = "0"
+
+SAMPLES = Path(__file__).resolve().parents[2] / "shared" / "sample_data"
 
 
 def _scale(sx: float, sy: float) -> np.ndarray:
@@ -61,3 +65,59 @@ def transform_image(img: np.ndarray, kind: str) -> tuple[np.ndarray, np.ndarray]
 @pytest.fixture
 def transform():
     return transform_image
+
+
+class Flights:
+    """Synthetic drone flights over a 1600x600 mosaic of the sample pairs: world "a" = before, "b" = after.
+    Flight A runs left to right at reference altitude; flight B runs the other way, 1.25x higher, camera turned
+    15 degrees, at a different speed. Footprints are the frame corners in world pixels (ground truth)."""
+
+    SIZE = (480, 360)
+
+    @staticmethod
+    def world(name: str) -> np.ndarray:
+        return np.hstack([cv2.imread(str(SAMPLES / p / f"{name}.jpg")) for p in ("pair01", "pair02")])
+
+    @classmethod
+    def view(cls, world: np.ndarray, cx: float, cy: float, scale: float = 1.0, angle: float = 0.0):
+        """Frame centred on world (cx, cy); one frame pixel spans `scale` world pixels."""
+        w, h = cls.SIZE
+        a = np.deg2rad(angle)
+        rot = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]]) * scale
+        t = np.array([cx, cy]) - rot @ np.array([w / 2, h / 2])
+        frame = cv2.warpAffine(world, np.hstack([rot, t[:, None]]), (w, h), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP)
+        footprint = (rot @ np.array([[0, w, w, 0], [0, 0, h, h]]) + t[:, None]).T.astype(np.float32)
+        return frame, footprint
+
+    @classmethod
+    def flight_a(cls, frames: int = 12, world=None):
+        world = cls.world("a") if world is None else world
+        return [cls.view(world, cx, 300) for cx in np.linspace(260, 1340, frames)]
+
+    @classmethod
+    def flight_b(cls, frames: int = 8, world=None):
+        world = cls.world("b") if world is None else world
+        return [cls.view(world, cx, 300, 1.25, 15) for cx in np.linspace(1250, 350, frames)]
+
+    @staticmethod
+    def overlap(p: np.ndarray, q: np.ndarray) -> float:
+        """Shared ground as a share of the smaller footprint."""
+        inter, _ = cv2.intersectConvexConvex(p, q)
+        return inter / min(cv2.contourArea(p), cv2.contourArea(q))
+
+    @staticmethod
+    def write_video(path: Path, frames, fps: float = 0.5) -> Path:
+        """MJPG/AVI at `fps`: at 0.5 fps every frame is exactly one 2 s extraction step."""
+        tmp = path.with_name(path.name + ".tmp.avi")  # OpenCV picks the container from the extension
+        h, w = frames[0].shape[:2]
+        writer = cv2.VideoWriter(str(tmp), cv2.VideoWriter_fourcc(*"MJPG"), fps, (w, h))
+        for f in frames:
+            writer.write(f)
+        writer.release()
+        tmp.replace(path)
+        return path
+
+
+@pytest.fixture(scope="session")
+def flights():
+    return Flights

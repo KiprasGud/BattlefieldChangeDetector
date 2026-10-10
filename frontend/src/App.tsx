@@ -2,10 +2,19 @@ import { useEffect, useRef, useState } from "react";
 import { analyze, checkHealth, CancelledError, type JobProgress } from "./api";
 import type { AnalyzeResponse } from "./types";
 import ResultViewer from "./components/ResultViewer";
+import ReviewDashboard from "./components/ReviewDashboard";
 
 const HEALTH_INTERVAL_MS = 15000;
 
+type View = "analyze" | "review";
+
 export default function App() {
+  // "#review" opens the review dashboard directly (bookmarkable).
+  const [view, setViewState] = useState<View>(window.location.hash === "#review" ? "review" : "analyze");
+  const setView = (next: View) => {
+    setViewState(next);
+    window.history.replaceState(null, "", next === "review" ? "#review" : window.location.pathname);
+  };
   const [data, setData] = useState<AnalyzeResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [stage, setStage] = useState<string>("");
@@ -82,10 +91,16 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "F5" || (e.ctrlKey && e.key === "Enter")) {
+      if (e.altKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        setView("review");
+      } else if (e.altKey && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        setView("analyze");
+      } else if (view === "analyze" && (e.key === "F5" || (e.ctrlKey && e.key === "Enter"))) {
         e.preventDefault();
         handleExecute();
-      } else if (e.key === "Escape") {
+      } else if (view === "analyze" && e.key === "Escape") {
         e.preventDefault();
         handlePurge();
       } else if (e.altKey && e.key.toLowerCase() === 'n') {
@@ -227,6 +242,10 @@ export default function App() {
     addLog("[SYS] JSON Payload generated & downloaded.");
   };
 
+  if (view === "review") {
+    return <ReviewDashboard onExit={() => setView("analyze")} />;
+  }
+
   return (
     <div className="terminal-layout">
       {/* LEFT PANE: INGESTION & PARAMETERS */}
@@ -239,6 +258,11 @@ export default function App() {
         </div>
         
         <div className="pane-content">
+          <div className="toggle-grid">
+            <button className="tactical-toggle active">[ALT+A] ANALYZE</button>
+            <button className="tactical-toggle" onClick={() => setView("review")}>[ALT+R] REVIEW</button>
+          </div>
+
           <div className="control-group">
             <div className="control-label">1. BASELINE (PAST)</div>
             <div 

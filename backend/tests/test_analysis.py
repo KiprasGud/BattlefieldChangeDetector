@@ -8,8 +8,9 @@ import pytest
 
 from app.analysis import analyze
 from app.analysis import cache, gemini_client, tiling
-from app.analysis.postprocess import clean_box, normalize_confidence, sector_for, to_result
+from app.analysis.postprocess import clean_box, normalize_category, normalize_confidence, sector_for, to_result
 from app.analysis.prompts import build_prompt
+from app.contracts import CATEGORY_LABELS
 
 ROOT = Path(__file__).resolve().parents[2]
 SAMPLES = ROOT / "shared" / "sample_data"
@@ -59,6 +60,33 @@ def test_to_result_drops_malformed():
 def test_build_prompt():
     p = build_prompt("new craters", "lt")
     assert "new craters" in p and "Lithuanian" in p
+
+
+# --- review categories ----------------------------------------------------------------------------
+
+def test_llm_schema_requires_a_category():
+    schema = gemini_client.LLMChange.model_json_schema()
+    assert "category" in schema["required"]
+    assert set(schema["properties"]["category"]["enum"]) == set(CATEGORY_LABELS)
+
+
+def test_prompt_defines_every_category():
+    p = build_prompt("anything", "lt")
+    assert all(f'"{code}"' in p for code in CATEGORY_LABELS)
+
+
+def test_normalize_category():
+    assert normalize_category("terrain_change") == "terrain_change"
+    assert normalize_category("New Structure") == "new_structure"
+    assert normalize_category("missing-object") == "missing_object"
+    assert normalize_category("aliens") == normalize_category(None) == "unknown_anomaly"
+
+
+def test_mock_fixtures_carry_categories():
+    a = cv2.imread(str(SAMPLES / "pair02" / "a.jpg"))
+    assert {(c.type, c.category) for c in analyze(a, a, "anything unusual").changes} == {
+        ("roof breach / impact", "unknown_anomaly"), ("felled tree / linear feature", "terrain_change"),
+    }
 
 
 class _FakeModels:

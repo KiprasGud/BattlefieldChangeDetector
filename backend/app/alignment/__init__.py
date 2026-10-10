@@ -6,9 +6,10 @@ from .register import (
     estimate_homography,
     extract_features,
     harmonize_resolution,
+    warp_into,
 )
 
 __all__ = [
-    "align", "estimate_homography", "extract_features", "harmonize_resolution",
+    "align", "estimate_homography", "extract_features", "harmonize_resolution", "warp_into",
     "Features", "Registration", "IMREAD_PIXELS",
 ]

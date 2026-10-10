@@ -1,8 +1,10 @@
-"""PERSON 3: FastAPI app with non-blocking job model, history, and samples."""
+"""PERSON 3: FastAPI app with non-blocking job model, history, and samples.
+Also hosts the watch-folder batch pipeline (watcher + review API) for drone videos and image pairs."""
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from dotenv import load_dotenv
 
@@ -10,11 +12,15 @@ load_dotenv()
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
-from . import pipeline  # noqa: E402
+from . import batch, pipeline, settings  # noqa: E402
+from .analysis import use_mock  # noqa: E402
 from .contracts import AnalyzeResponse  # noqa: E402
+from .ingest import SCHEME, watcher  # noqa: E402
+from .render import report  # noqa: E402
 from .storage import (  # noqa: E402
     complete_job,
     create_job,
@@ -25,15 +31,28 @@ from .storage import (  # noqa: E402
     prune_old_jobs,
     update_job_stage,
 )
+from .storage import batches as batch_store  # noqa: E402
+from .video import frame_fps  # noqa: E402
 
 pipeline.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 SAMPLE_DATA_DIR = Path(__file__).resolve().parents[2] / "shared" / "sample_data"
 init_db()
+batch_store.init_batch_db()
 
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
 executor = ThreadPoolExecutor(max_workers=4)
 
-app = FastAPI(title="Zvalgas AI - Battlefield Change Detector")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    batch.resume_interrupted()
+    if watcher.watch_enabled():
+        watcher.start_service()
+    yield
+    watcher.stop_service()
+
+
+app = FastAPI(title="Zvalgas AI - Battlefield Change Detector", lifespan=lifespan)
 
 # Fix CORS (#10): allow_credentials=False with wildcard origins
 app.add_middleware(
@@ -221,3 +240,91 @@ def get_job_status(job_id: str):
 def get_jobs_history(limit: int = Query(50, ge=1, le=100)):
     """Returns list of recent analysis missions."""
     return list_jobs(limit=limit)
+
+
+# --- watch-folder batches and review ---------------------------------------------------------------
+
+class SettingsUpdate(BaseModel):
+    ai_enabled: bool
+
+
+class ReviewUpdate(BaseModel):
+    status: Literal["pending", "accepted", "rejected"]
+
+
+def _settings() -> dict[str, Any]:
+    svc = watcher.service()
+    return {
+        "ai_enabled": settings.ai_enabled(),
+        "ai_available": not use_mock(),
+        "watch_enabled": svc is not None,
+        "watch_dir": str(svc.folder if svc else watcher.watch_dir()),
+        "frame_fps": frame_fps(),
+        "max_pairs": batch.max_pairs(),
+    }
+
+
+@app.get("/api/settings")
+def get_settings():
+    return _settings()
+
+
+@app.put("/api/settings")
+def put_settings(update: SettingsUpdate):
+    """Switch the AI step for batches queued from now on (and for /api/analyze) until restart."""
+    settings.set_ai_enabled(update.ai_enabled)
+    return _settings()
+
+
+@app.get("/api/inbox")
+def get_inbox():
+    """Files in the watch folder waiting for a partner, and names that do not follow the scheme."""
+    svc = watcher.service()
+    snapshot = svc.inbox.snapshot() if svc else {"waiting": [], "paired": [], "rejected": []}
+    return {"watching": svc is not None, "folder": _settings()["watch_dir"], "scheme": SCHEME, **snapshot}
+
+
+@app.get("/api/batches")
+def get_batches(limit: int = Query(50, ge=1, le=200)):
+    return batch_store.list_batches(limit)
+
+
+@app.get("/api/batches/{batch_id}")
+def get_batch_detail(batch_id: str):
+    detail = batch_store.batch_detail(batch_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return detail
+
+
+@app.post("/api/batches/{batch_id}/rerun")
+def rerun_batch(batch_id: str):
+    """Process the same sources again with the current settings, as a new batch."""
+    try:
+        new_id = batch.rerun_batch(batch_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    batch.worker.submit(new_id)
+    return {"batch_id": new_id, "status": "queued"}
+
+
+@app.post("/api/findings/{finding_id}/review")
+def review_finding(finding_id: str, update: ReviewUpdate):
+    finding = batch_store.set_review(finding_id, update.status)
+    if finding is None:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    return finding
+
+
+@app.get("/api/batches/{batch_id}/report")
+def batch_report(batch_id: str, fmt: Literal["json", "html"] = Query("json", alias="format")):
+    """Final report of the verified (accepted) findings, as a download."""
+    detail = batch_store.batch_detail(batch_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    headers = {"Content-Disposition": f'attachment; filename="zvalgas_report_{batch_id}.{fmt}"'}
+    if fmt == "html":
+        return HTMLResponse(report.build_html(detail, batch.BATCH_DIR / batch_id), headers=headers)
+    return JSONResponse(report.build_json(detail), headers=headers)

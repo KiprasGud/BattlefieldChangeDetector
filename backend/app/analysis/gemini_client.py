@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 from pydantic import BaseModel, Field
 
-from ..contracts import AnalysisResult
+from ..contracts import AnalysisResult, Category
 from .postprocess import to_result
 from .prompts import build_prompt, build_verify_prompt
 
@@ -31,6 +31,7 @@ class GeminiError(RuntimeError):
 # LLM-facing schema: no sector / report_date, those are computed in postprocess.
 class LLMChange(BaseModel):
     type: str
+    category: Category
     description: str
     location_text: str
     confidence: Literal["high", "medium", "low"]

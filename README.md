@@ -57,6 +57,14 @@ The terminal rejects standard SaaS aesthetics in favor of a utilitarian, Bloombe
 - **Vision Processing**: OpenCV for image registration, multi-point alignment, and structural warping.
 - **AI Core**: Gemini 2.5 API pipeline utilized for high-fidelity change detection, structural comparison, and target classification.
 
+### Watch-Folder Batch Review (Drone Video & Image Pairs)
+1. **Drop** two files named `<key>_<Before|After|DayN>` into `input/` (or `WATCH_DIR`), e.g. `Site_A_Day1.mp4` + `Site_A_Day2.mov` or `ProjectX_Before.jpg` + `ProjectX_After.png`. Extensions, EXIF, file size and dates are ignored; image vs video is read from the file content. `Day1`, `Day2`, `Day3` pair consecutively.
+2. **Processing** (automatic, one batch at a time): FFmpeg extracts 1 frame every 2 s (bundled via `imageio-ffmpeg`), frames of the two flights are matched by content (not by time: frame 10 of A may match frame 45 of B), each matched pair is aligned (SIFT + MAGSAC homography) and diffed with the change heatmap.
+3. **AI toggle** (`AI_ENABLED`, or `[ALT+I]` in the dashboard): ON sends only the curated pairs with differences to Gemini 3.5 Flash-Lite, which boxes and categorizes changes as Missing Equipment/Objects, New Structures/Construction, Terrain/Landscape Changes or Unknown Anomaly. OFF stops after the CV diff.
+4. **Review** at `http://localhost:5173/#review` (`[ALT+R]`): slider / split / heatmap per pair, findings grouped by category, `[A]` accept, `[R]` reject, `[E]` export the verified change report (HTML or JSON, accepted findings only).
+
+Headless alternative: `cd backend && python -m app.ingest.watcher [FOLDER] [--once]` (set `WATCH_ENABLED=0` for the API then). Details: [`docs/architecture.md`](docs/architecture.md), [`docs/api.md`](docs/api.md).
+
 ### Data Schema
 - **Exports**: Extensible to Cursor on Target (CoT) XML (MIL-STD compatible) and strict JSON payload formatting, resolving targets dynamically based on ingested criteria (e.g., `a-h-G-U-C` for hostile vehicles).
 

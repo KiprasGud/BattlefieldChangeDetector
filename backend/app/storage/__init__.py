@@ -1,4 +1,6 @@
-"""PERSON 3: Storage package for job history and database management."""
+"""PERSON 3: Storage package for job history and database management.
+
+Batch review records (watch-folder pipeline) live in .batches, imported as a module: from .storage import batches."""
 from .db import (
     complete_job,
     create_job,

@@ -1,4 +1,4 @@
-import type { AlignMethod, AnalysisResult, AnalyzeResponse } from "./types";
+import type { AlignMethod, AnalysisResult, AnalyzeResponse, Category, Confidence } from "./types";
 
 export interface SamplePair {
   id: string;
@@ -193,3 +193,128 @@ export async function checkHealth(): Promise<boolean> {
     return false;
   }
 }
+
+// --- watch-folder batches and review (GET/POST /api/batches, /api/findings, /api/settings, /api/inbox) ---
+
+export type ReviewStatus = "pending" | "accepted" | "rejected";
+
+export interface Finding {
+  id: string;
+  batch_id: string;
+  pair_id: string;
+  idx: number;
+  category: Category;
+  type: string;
+  description: string;
+  location_text: string;
+  confidence: Confidence;
+  box: [number, number, number, number];
+  sector: string | null;
+  review_status: ReviewStatus;
+  reviewed_at: string | null;
+}
+
+export interface FramePair {
+  id: string;
+  batch_id: string;
+  idx: number;
+  frame_a: number;
+  frame_b: number;
+  time_a: number; // seconds into source A (display only)
+  time_b: number;
+  inliers: number;
+  overlap: number; // shared ground, 0-1
+  ssim: number; // structural similarity after alignment, 0-1
+  align_quality: number;
+  align_method: string;
+  change_ratio: number;
+  source: "ai" | "cv";
+  summary: string;
+  recommendation: string;
+  images: { image_a_url: string; aligned_b_url: string; heatmap_url: string; annotated_url: string };
+  findings: Finding[];
+}
+
+export interface Batch {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  site: string;
+  name_a: string;
+  name_b: string;
+  tag_a: string;
+  tag_b: string;
+  kind_a: "image" | "video" | null;
+  kind_b: "image" | "video" | null;
+  ai_enabled: boolean;
+  status: "queued" | "running" | "done" | "error";
+  stage: string;
+  progress: string;
+  frames_a: number | null;
+  frames_b: number | null;
+  matched_pairs: number | null;
+  pairs_count: number | null;
+  timings: Record<string, number>;
+  warnings: string[];
+  error_message: string | null;
+  findings_count: number;
+  pending_count: number;
+  accepted_count: number;
+  rejected_count: number;
+}
+
+export interface BatchDetail extends Batch {
+  pairs: FramePair[];
+}
+
+export interface PipelineSettings {
+  ai_enabled: boolean;
+  ai_available: boolean;
+  watch_enabled: boolean;
+  watch_dir: string;
+  frame_fps: number;
+  max_pairs: number;
+}
+
+export interface InboxState {
+  watching: boolean;
+  folder: string;
+  scheme: string;
+  waiting: string[];
+  paired: string[];
+  rejected: { name: string; reason: string }[];
+}
+
+async function getJson<T>(url: string, what: string): Promise<T> {
+  const res = await request(url);
+  if (!res.ok) throw new Error(await errorMessage(res, `Failed to load ${what}`));
+  return res.json();
+}
+
+async function sendJson<T>(url: string, method: string, body: unknown, what: string): Promise<T> {
+  const res = await request(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, what));
+  return res.json();
+}
+
+export const fetchSettings = () => getJson<PipelineSettings>("/api/settings", "settings");
+export const fetchInbox = () => getJson<InboxState>("/api/inbox", "inbox");
+export const fetchBatches = (limit: number = 50) => getJson<Batch[]>(`/api/batches?limit=${limit}`, "batches");
+export const fetchBatch = (id: string) => getJson<BatchDetail>(`/api/batches/${id}`, `batch ${id}`);
+
+export const updateSettings = (aiEnabled: boolean) =>
+  sendJson<PipelineSettings>("/api/settings", "PUT", { ai_enabled: aiEnabled }, "Settings update failed");
+
+export const reviewFinding = (id: string, status: ReviewStatus) =>
+  sendJson<Finding>(`/api/findings/${id}/review`, "POST", { status }, "Review failed");
+
+export async function rerunBatch(id: string): Promise<string> {
+  const data = await sendJson<{ batch_id: string }>(`/api/batches/${id}/rerun`, "POST", undefined, "Re-queue failed");
+  return data.batch_id;
+}
+
+export const reportUrl = (id: string, format: "html" | "json") => `/api/batches/${id}/report?format=${format}`;
