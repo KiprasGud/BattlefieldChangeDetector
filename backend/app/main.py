@@ -119,6 +119,7 @@ def _run_job_worker(
     def on_stage(stage: str, timings: Optional[dict[str, float]] = None):
         update_job_stage(job_id, stage, timings)
 
+    meta: dict[str, Any] = {}
     try:
         response = pipeline.run(
             bytes_a=bytes_a,
@@ -128,13 +129,14 @@ def _run_job_worker(
             draw_grid=draw_grid,
             job_id=job_id,
             stage_callback=on_stage,
+            meta=meta,
         )
         complete_job(
             job_id=job_id,
             result=response.result.model_dump(),
             align_quality=response.align_quality,
             align_ok=response.align_ok,
-            align_method="sift" if response.align_ok else "none",
+            align_method=meta.get("align_method", "none"),
             images=response.images,
             timings=response.timings,
             warnings=response.warnings,

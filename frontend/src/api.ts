@@ -1,4 +1,4 @@
-import type { AnalyzeResponse } from "./types";
+import type { AlignMethod, AnalysisResult, AnalyzeResponse } from "./types";
 
 export interface SamplePair {
   id: string;
@@ -30,7 +30,58 @@ export interface JobHistoryItem {
   timings?: Record<string, number>;
   warnings?: string[];
   images?: Record<string, string>;
-  result?: any;
+  result?: AnalysisResult | null;
+  error_message?: string | null;
+}
+
+const OFFLINE_MSG = "Backend not reachable on http://localhost:8000. Is uvicorn running?";
+
+// fetch() only rejects on network failure; turn that into a readable message.
+async function request(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new Error(OFFLINE_MSG);
+  }
+}
+
+// Read the body once, then pull FastAPI's `detail` out of it if present.
+async function errorMessage(res: Response, fallback: string): Promise<string> {
+  // The Vite proxy answers 500/502/504 with an empty body when the backend is down.
+  const text = await res.text().catch(() => "");
+  if ([500, 502, 504].includes(res.status) && !text.trim()) return OFFLINE_MSG;
+  try {
+    const detail = JSON.parse(text)?.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      // 422 validation errors: [{loc, msg, type}, ...]
+      return detail.map((d) => d?.msg ?? JSON.stringify(d)).join("; ");
+    }
+  } catch {
+    // not JSON
+  }
+  const snippet = text.trim().slice(0, 200);
+  return snippet ? `${fallback} (HTTP ${res.status}): ${snippet}` : `${fallback} (HTTP ${res.status})`;
+}
+
+export function jobToResponse(job: JobHistoryItem): AnalyzeResponse {
+  const method = job.align_method;
+  return {
+    job_id: job.job_id,
+    result: job.result as AnalysisResult,
+    align_quality: job.align_quality ?? 0,
+    align_ok: Boolean(job.align_ok),
+    align_method: method === "sift" || method === "ecc" ? (method as AlignMethod) : "none",
+    images: {
+      aligned_b_url: job.images?.aligned_b_url || "",
+      annotated_url: job.images?.annotated_url || "",
+      image_a_url: job.images?.image_a_url,
+      heatmap_url: job.images?.heatmap_url,
+    },
+    timings: job.timings,
+    warnings: job.warnings,
+    lang: job.lang,
+  };
 }
 
 export async function submitJob(
@@ -41,79 +92,66 @@ export async function submitJob(
   drawGrid: boolean = false
 ): Promise<string> {
   const form = new FormData();
-  form.append("image_a", a);
-  form.append("image_b", b);
+  form.append("image_a", a, a instanceof File ? a.name : "image_a.jpg");
+  form.append("image_b", b, b instanceof File ? b.name : "image_b.jpg");
   form.append("criteria", criteria);
   form.append("lang", lang);
-  if (drawGrid) {
-    form.append("draw_grid", "true");
-  }
+  form.append("draw_grid", drawGrid ? "true" : "false");
 
-  const res = await fetch("/api/analyze", { method: "POST", body: form });
-  if (!res.ok) {
-    let msg = "Analysis failed";
-    try {
-      const err = await res.json();
-      msg = err.detail || msg;
-    } catch {
-      msg = await res.text();
-    }
-    throw new Error(msg);
-  }
+  const res = await request("/api/analyze", { method: "POST", body: form });
+  if (!res.ok) throw new Error(await errorMessage(res, "Analysis failed"));
   const data = await res.json();
   return data.job_id;
 }
 
 export async function fetchJob(jobId: string): Promise<JobHistoryItem> {
-  const res = await fetch(`/api/jobs/${jobId}`);
-  if (!res.ok) {
-    throw new Error(`Failed to load job ${jobId}`);
-  }
+  const res = await request(`/api/jobs/${jobId}`);
+  if (!res.ok) throw new Error(await errorMessage(res, `Failed to load job ${jobId}`));
   return res.json();
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function pollJob(
   jobId: string,
   onProgress?: (progress: JobProgress) => void,
-  maxWaitMs: number = 180000
+  isCancelled: () => boolean = () => false,
+  // Real Gemini with verification + tiling can take several minutes.
+  maxWaitMs: number = 10 * 60 * 1000
 ): Promise<AnalyzeResponse> {
   const start = Date.now();
+  let failures = 0;
   while (Date.now() - start < maxWaitMs) {
-    const job = await fetchJob(jobId);
-    if (onProgress) {
-      onProgress({
-        stage: job.stage,
-        timings: job.timings || {},
-        status: job.status,
-      });
+    if (isCancelled()) throw new CancelledError();
+
+    let job: JobHistoryItem;
+    try {
+      job = await fetchJob(jobId);
+      failures = 0;
+    } catch (e) {
+      // Tolerate short hiccups (e.g. uvicorn --reload restarting) before giving up.
+      if (++failures >= 5) throw e;
+      await sleep(1000);
+      continue;
     }
 
-    if (job.status === "done" && job.result) {
-      return {
-        job_id: job.job_id,
-        result: job.result,
-        align_quality: job.align_quality ?? 0,
-        align_ok: Boolean(job.align_ok),
-        align_method: (job.align_method as any) || "none",
-        images: {
-          aligned_b_url: job.images?.aligned_b_url || "",
-          annotated_url: job.images?.annotated_url || "",
-          image_a_url: job.images?.image_a_url,
-          heatmap_url: job.images?.heatmap_url,
-        },
-        timings: job.timings,
-        warnings: job.warnings,
-      };
-    }
+    if (isCancelled()) throw new CancelledError();
+    onProgress?.({ stage: job.stage, timings: job.timings || {}, status: job.status });
 
+    if (job.status === "done" && job.result) return jobToResponse(job);
     if (job.status === "error") {
-      throw new Error((job as any).error_message || "Reconnaissance processing failed.");
+      throw new Error(job.error_message || "Reconnaissance processing failed.");
     }
-
-    // Wait 250ms before next poll
-    await new Promise((r) => setTimeout(r, 250));
+    await sleep(400);
   }
-  throw new Error("Analysis job timed out.");
+  throw new Error("Analysis job timed out after 10 minutes.");
+}
+
+export class CancelledError extends Error {
+  constructor() {
+    super("cancelled");
+    this.name = "CancelledError";
+  }
 }
 
 export async function analyze(
@@ -122,32 +160,36 @@ export async function analyze(
   criteria: string,
   lang: string = "en",
   drawGrid: boolean = false,
-  onProgress?: (progress: JobProgress) => void
+  onProgress?: (progress: JobProgress) => void,
+  isCancelled?: () => boolean
 ): Promise<AnalyzeResponse> {
   const jobId = await submitJob(a, b, criteria, lang, drawGrid);
-  return pollJob(jobId, onProgress);
+  return pollJob(jobId, onProgress, isCancelled);
 }
 
 export async function fetchJobsHistory(limit: number = 30): Promise<JobHistoryItem[]> {
-  const res = await fetch(`/api/jobs?limit=${limit}`);
-  if (!res.ok) {
-    throw new Error("Failed to load mission history");
-  }
+  const res = await request(`/api/jobs?limit=${limit}`);
+  if (!res.ok) throw new Error(await errorMessage(res, "Failed to load mission history"));
   return res.json();
 }
 
 export async function fetchSamples(): Promise<SamplePair[]> {
-  const res = await fetch("/api/samples");
-  if (!res.ok) {
-    throw new Error("Failed to load sample pairs");
-  }
+  const res = await request("/api/samples");
+  if (!res.ok) throw new Error(await errorMessage(res, "Failed to load sample pairs"));
   return res.json();
 }
 
 export async function fetchImageAsBlob(url: string): Promise<Blob> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch image from ${url}`);
-  }
+  const res = await request(url);
+  if (!res.ok) throw new Error(await errorMessage(res, `Failed to fetch image ${url}`));
   return res.blob();
+}
+
+export async function checkHealth(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/health");
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
