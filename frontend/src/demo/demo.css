@@ -1,0 +1,266 @@
+/* Demo layer (docs/demo.md): presentation view + prep mode. Built on index.css tokens and classes, UI.md rules
+   unchanged: no radius, shadows or transitions, 1px borders, monospace data, the same palette. The presentation
+   only scales type up so it reads from the back of a room. */
+
+/* --- Presentation (demo.html) ------------------------------------------------------------------------------ */
+
+.present {
+  --fs-data: 14px;
+  font-size: var(--fs-data);
+  height: 100vh;
+  width: 100vw;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.present-head {
+  display: flex;
+  align-items: baseline;
+  gap: 24px;
+  padding: 10px 16px;
+  border-bottom: var(--border-width) solid var(--border-main);
+  min-width: 0;
+}
+
+.present-head .pane-title {
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.present-title {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.present-title-main {
+  font-size: 22px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.present-title-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.present-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 26%);
+  min-height: 0;
+}
+
+.present-frames {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border-main); /* the 1px gap is the divider */
+  border-right: var(--border-width) solid var(--border-main);
+  min-height: 0;
+}
+
+.present-frame {
+  position: relative;
+  background: var(--bg-app);
+  overflow: hidden;
+}
+
+.present-frame .diff-label {
+  left: 12px;
+}
+
+/* The label sits right above its box at any type size. */
+.present .tactical-box-label {
+  top: auto;
+  bottom: 100%;
+}
+
+/* Baseline: dashed outline where the change appears, labelled only when selected. */
+.tactical-box.present-ghost {
+  border-style: dashed;
+}
+
+.tactical-box.present-ghost:not(.selected) .tactical-box-label {
+  display: none;
+}
+
+.tactical-box.dimmed {
+  opacity: 0.3;
+}
+
+.present-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  overflow-y: auto;
+  min-height: 0;
+  line-height: 1.5;
+}
+
+.present-count {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.present-count .mono {
+  color: var(--accent-danger);
+}
+
+.present-targets {
+  max-height: none;
+}
+
+.present-detail {
+  border: var(--border-width) solid var(--text-main);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.present-foot {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 16px;
+  border-top: var(--border-width) solid var(--border-main);
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Title card: the presentation's landing page */
+.present-cover {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 16px;
+  width: min(760px, 100% - 64px);
+  margin: 0 auto;
+  min-height: 0;
+}
+
+.present-cover .pane-title {
+  font-size: 16px;
+}
+
+.present-cover-title {
+  font-family: var(--font-mono);
+  font-size: 40px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.1;
+}
+
+.present-cover-sub {
+  font-size: 16px;
+}
+
+.present-agenda {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.present-agenda .target-row {
+  padding: 8px 10px;
+}
+
+.present-start {
+  margin-top: 8px;
+}
+
+.present-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* --- Prep mode (prep.html) --------------------------------------------------------------------------------- */
+
+.prep-banner {
+  border: var(--border-width) solid var(--accent-danger);
+  color: var(--accent-danger);
+  font-family: var(--font-mono);
+  font-size: var(--fs-data);
+  font-weight: 700;
+  padding: 6px 8px;
+}
+
+.prep-banner.dim {
+  border-color: var(--border-main);
+  color: var(--text-dim);
+}
+
+.prep-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prep-nowrap {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.scene-row {
+  display: grid;
+  grid-template-columns: 3ch 48px minmax(0, 1fr);
+  grid-template-areas: "idx thumb title" "idx thumb actions";
+  gap: 2px 6px;
+  align-items: center;
+  border: var(--border-width) solid var(--border-main);
+  padding: 4px;
+  font-size: var(--fs-data);
+}
+
+.scene-row > .mono:first-child {
+  grid-area: idx;
+}
+
+.scene-row.editing {
+  border-color: var(--text-main);
+  outline: var(--border-width) solid var(--text-main);
+  outline-offset: -2px;
+}
+
+.scene-thumb {
+  grid-area: thumb;
+  width: 48px;
+  height: 32px;
+  object-fit: cover;
+  display: block;
+  border: var(--border-width) solid var(--border-main);
+}
+
+.scene-row-title {
+  grid-area: title;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-actions {
+  grid-area: actions;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.scene-actions .header-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
